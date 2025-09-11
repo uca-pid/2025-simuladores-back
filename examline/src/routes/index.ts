@@ -1,6 +1,7 @@
 import { type PrismaClient } from "@prisma/client"
 import { type Express } from "express"
 import UserRoute from "./user.route"
+import ExamRoute from "./exam.route"
 
 const addRoutes = (app: Express, prisma: PrismaClient) => {
     app.get('/', (req, res) => {
@@ -10,6 +11,7 @@ const addRoutes = (app: Express, prisma: PrismaClient) => {
     })
 
     app.use('/users', UserRoute(prisma))
+    app.use('/exams', ExamRoute(prisma))
 }
 
 export default addRoutes
