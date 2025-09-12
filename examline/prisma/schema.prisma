@@ -14,8 +14,27 @@ datasource db {
 }
 
 model User {
-  id    Int    @id @default(autoincrement())
-  name  String
-  email String @unique
+  id       Int     @id @default(autoincrement())
+  nombre   String
+  email    String  @unique
+  password String
+  exams    Exam[]  // relación inversa: un usuario puede crear muchos exámenes
+}
+
+model Exam {
+  id         Int        @id @default(autoincrement())
+  titulo     String
+  profesor   User       @relation(fields: [profesorId], references: [id])
+  profesorId Int
+  preguntas  Pregunta[]
+}
+
+model Pregunta {
+  id       Int    @id @default(autoincrement())
+  texto    String
+  opciones Json   // en lugar de String[]
+  correcta Int
+  exam     Exam   @relation(fields: [examId], references: [id])
+  examId   Int
 }
 
