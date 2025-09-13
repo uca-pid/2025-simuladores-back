@@ -1,6 +1,6 @@
 import { type PrismaClient } from "@prisma/client";
 import { Router } from "express";
-import bcrypt from "bcryptjs";  // Importar bcrypt
+import bcrypt from "bcryptjs";
 
 const UserRoute = (prisma: PrismaClient) => {
   const router = Router();
@@ -9,7 +9,7 @@ const UserRoute = (prisma: PrismaClient) => {
   router.get('/', async (req, res) => {
     try {
       const users = await prisma.user.findMany({
-        select: { id: true, nombre: true, email: true }, // no enviamos password
+        select: { id: true, nombre: true, email: true },
       });
       res.json(users);
     } catch (error) {
@@ -17,12 +17,12 @@ const UserRoute = (prisma: PrismaClient) => {
     }
   });
 
-  // 🔹 Obtener un usuario por id
+  // Obtener un usuario por id
   router.get('/:id', async (req, res) => {
     try {
       const user = await prisma.user.findUnique({
         where: { id: parseInt(req.params.id) },
-        select: { id: true, nombre: true, email: true }, // sin password
+        select: { id: true, nombre: true, email: true },
       });
 
       if (!user) {
@@ -35,7 +35,7 @@ const UserRoute = (prisma: PrismaClient) => {
     }
   });
 
-  // 🔹 Registrar usuario
+  // Registrar usuario
   router.post("/signup", async (req, res) => {
     const { nombre, email, password } = req.body;
 
@@ -63,7 +63,7 @@ const UserRoute = (prisma: PrismaClient) => {
     }
   });
 
-  // 🔹 Login
+  // Login
   router.post('/login', async (req, res) => {
     const { email, password } = req.body;
 
@@ -92,12 +92,11 @@ const UserRoute = (prisma: PrismaClient) => {
     }
   });
 
-  // 🔹 Actualizar usuario
+  // Actualizar usuario
   router.put('/:id', async (req, res) => {
     const { nombre, email, password } = req.body;
 
     try {
-      // preparar objeto de actualización
       const dataToUpdate: any = {};
       if (nombre) dataToUpdate.nombre = nombre;
       if (email) dataToUpdate.email = email;
@@ -108,13 +107,34 @@ const UserRoute = (prisma: PrismaClient) => {
       const updatedUser = await prisma.user.update({
         where: { id: parseInt(req.params.id) },
         data: dataToUpdate,
-        select: { id: true, nombre: true, email: true }, // no devolvemos password
+        select: { id: true, nombre: true, email: true },
       });
 
       res.json(updatedUser);
     } catch (error) {
       console.error('Error al actualizar usuario:', error);
       res.status(500).json({ error: 'Error al actualizar el usuario.' });
+    }
+  });
+
+  // 🔴 Eliminar usuario
+  router.delete('/:id', async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+
+      // Primero verificar si existe
+      const user = await prisma.user.findUnique({ where: { id } });
+      if (!user) {
+        return res.status(404).json({ error: 'Usuario no encontrado.' });
+      }
+
+      // Eliminar el usuario
+      await prisma.user.delete({ where: { id } });
+
+      res.json({ message: 'Usuario eliminado correctamente.' });
+    } catch (error) {
+      console.error('Error al eliminar usuario:', error);
+      res.status(500).json({ error: 'Error al eliminar el usuario.' });
     }
   });
 
