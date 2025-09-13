@@ -138,8 +138,58 @@ const UserRoute = (prisma: PrismaClient) => {
       res.status(500).json({ error: 'Error al eliminar el usuario.' });
     }
   });
+  // Eliminar usuario pero reasignando sus exámenes al "Backuser"
+router.delete('/special/:id', async (req, res) => {
+  try {
+    const userId = parseInt(req.params.id);
+
+    // Verificar si el usuario existe
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      include: { exams: true },
+    });
+
+    if (!user) {
+      return res.status(404).json({ error: "Usuario no encontrado." });
+    }
+
+    // Buscar o crear el usuario especial "Backuser"
+    let backuser = await prisma.user.findUnique({
+      where: { email: "backuser@system.com" }, // 👈 le damos un email fijo
+    });
+
+    if (!backuser) {
+      backuser = await prisma.user.create({
+        data: {
+          nombre: "Backuser",
+          email: "backuser@system.com",
+          password: await bcrypt.hash("backuser123", 10), // 👈 contraseña dummy
+          rol: "system",
+        },
+      });
+    }
+
+    // Reasignar todos los exámenes al Backuser
+    await prisma.exam.updateMany({
+      where: { profesorId: userId },
+      data: { profesorId: backuser.id },
+    });
+
+    // Eliminar al usuario original
+    await prisma.user.delete({ where: { id: userId } });
+
+    res.json({
+      message: `Usuario ${user.nombre} eliminado. Sus exámenes fueron asignados al Backuser.`,
+    });
+  } catch (error) {
+    console.error("Error en special delete:", error);
+    res.status(500).json({ error: "Error en el proceso de eliminación especial." });
+  }
+});
 
   return router;
 };
+
+
 
 export default UserRoute;
