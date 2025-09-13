@@ -9,7 +9,7 @@ const UserRoute = (prisma: PrismaClient) => {
   router.get('/', async (req, res) => {
     try {
       const users = await prisma.user.findMany({
-        select: { id: true, nombre: true, email: true },
+        select: { id: true, nombre: true, email: true, rol: true },
       });
       res.json(users);
     } catch (error) {
@@ -22,7 +22,7 @@ const UserRoute = (prisma: PrismaClient) => {
     try {
       const user = await prisma.user.findUnique({
         where: { id: parseInt(req.params.id) },
-        select: { id: true, nombre: true, email: true },
+        select: { id: true, nombre: true, email: true, rol: true },
       });
 
       if (!user) {
@@ -37,7 +37,7 @@ const UserRoute = (prisma: PrismaClient) => {
 
   // Registrar usuario
   router.post("/signup", async (req, res) => {
-    const { nombre, email, password } = req.body;
+    const { nombre, email, password, rol } = req.body;
 
     try {
       const existingUser = await prisma.user.findUnique({ where: { email } });
@@ -52,8 +52,9 @@ const UserRoute = (prisma: PrismaClient) => {
           nombre,
           email,
           password: hashedPassword,
+          rol: rol || "student", // 👈 por defecto student
         },
-        select: { id: true, nombre: true, email: true },
+        select: { id: true, nombre: true, email: true, rol: true },
       });
 
       res.status(201).json(user);
@@ -85,6 +86,7 @@ const UserRoute = (prisma: PrismaClient) => {
         userId: user.id,
         nombre: user.nombre,
         email: user.email,
+        rol: user.rol,
       });
     } catch (error) {
       console.error('Error al verificar el usuario:', error);
@@ -94,12 +96,13 @@ const UserRoute = (prisma: PrismaClient) => {
 
   // Actualizar usuario
   router.put('/:id', async (req, res) => {
-    const { nombre, email, password } = req.body;
+    const { nombre, email, password, rol } = req.body;
 
     try {
       const dataToUpdate: any = {};
       if (nombre) dataToUpdate.nombre = nombre;
       if (email) dataToUpdate.email = email;
+      if (rol) dataToUpdate.rol = rol;
       if (password && password.trim() !== "") {
         dataToUpdate.password = await bcrypt.hash(password, 10);
       }
@@ -107,7 +110,7 @@ const UserRoute = (prisma: PrismaClient) => {
       const updatedUser = await prisma.user.update({
         where: { id: parseInt(req.params.id) },
         data: dataToUpdate,
-        select: { id: true, nombre: true, email: true },
+        select: { id: true, nombre: true, email: true, rol: true },
       });
 
       res.json(updatedUser);
@@ -117,18 +120,16 @@ const UserRoute = (prisma: PrismaClient) => {
     }
   });
 
-  // 🔴 Eliminar usuario
+  // Eliminar usuario
   router.delete('/:id', async (req, res) => {
     try {
       const id = parseInt(req.params.id);
 
-      // Primero verificar si existe
       const user = await prisma.user.findUnique({ where: { id } });
       if (!user) {
         return res.status(404).json({ error: 'Usuario no encontrado.' });
       }
 
-      // Eliminar el usuario
       await prisma.user.delete({ where: { id } });
 
       res.json({ message: 'Usuario eliminado correctamente.' });
