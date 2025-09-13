@@ -53,7 +53,7 @@ describe("DELETE /users/special/:id", () => {
     prismaMock.exam.updateMany.mockResolvedValue({ count: 1 });
     prismaMock.user.delete.mockResolvedValue(usuarioAEliminar);
 
-    const res = await request(app).delete("/users/special/10");
+    const res = await request(app).delete("/users/10");
 
     expect(res.statusCode).toBe(200);
     expect(res.body.message).toMatch(
@@ -75,7 +75,7 @@ describe("DELETE /users/special/:id", () => {
   it("debe responder 404 si el usuario no existe", async () => {
     prismaMock.user.findUnique.mockResolvedValue(null);
 
-    const res = await request(app).delete("/users/special/123");
+    const res = await request(app).delete("/users/123");
 
     expect(res.statusCode).toBe(404);
     expect(res.body).toHaveProperty("error", "Usuario no encontrado.");

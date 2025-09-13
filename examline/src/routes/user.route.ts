@@ -121,7 +121,7 @@ const UserRoute = (prisma: PrismaClient) => {
   });
 
   // Eliminar usuario
-  router.delete('/:id', async (req, res) => {
+  /*router.delete('/:id', async (req, res) => {
     try {
       const id = parseInt(req.params.id);
 
@@ -137,9 +137,9 @@ const UserRoute = (prisma: PrismaClient) => {
       console.error('Error al eliminar usuario:', error);
       res.status(500).json({ error: 'Error al eliminar el usuario.' });
     }
-  });
+  });*/
   // Eliminar usuario pero reasignando sus exámenes al "Backuser"
-router.delete('/special/:id', async (req, res) => {
+router.delete('/:id', async (req, res) => {
   try {
     const userId = parseInt(req.params.id);
 
@@ -163,7 +163,7 @@ router.delete('/special/:id', async (req, res) => {
         data: {
           nombre: "Backuser",
           email: "backuser@system.com",
-          password: await bcrypt.hash("backuser123", 10), // 👈 contraseña dummy
+          password: await bcrypt.hash("backuser1235123123123123123123ferroAguanteganalalibertadores1231231231231241351231351Q@25242345676789765434234e56678978654323w4e567", 10), // 👈 contraseña dummy
           rol: "system",
         },
       });
