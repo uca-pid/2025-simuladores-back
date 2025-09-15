@@ -17,6 +17,7 @@ model User {
   id       Int     @id @default(autoincrement())
   nombre   String
   email    String  @unique
+  rol      String @default("student")
   password String
   exams    Exam[]  // relación inversa: un usuario puede crear muchos exámenes
 }
