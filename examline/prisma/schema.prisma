@@ -1,0 +1,51 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id          Int           @id @default(autoincrement())
+  nombre      String
+  email       String        @unique
+  rol         String        @default("student")
+  password    String
+  exams       Exam[]        // relación inversa: un usuario puede crear muchos exámenes
+  examHistory ExamHistory[] // 🔹 historial de exámenes visualizados
+}
+
+model Exam {
+  id         Int           @id @default(autoincrement())
+  titulo     String
+  profesor   User          @relation(fields: [profesorId], references: [id])
+  profesorId Int
+  preguntas  Pregunta[]
+  history    ExamHistory[] // 🔹 historial de exámenes visualizados
+}
+
+model Pregunta {
+  id       Int    @id @default(autoincrement())
+  texto    String
+  opciones Json   // en lugar de String[]
+  correcta Int
+  exam     Exam   @relation(fields: [examId], references: [id])
+  examId   Int
+}
+
+model ExamHistory {
+  id       Int      @id @default(autoincrement())
+  user     User     @relation(fields: [userId], references: [id])
+  userId   Int
+  exam     Exam     @relation(fields: [examId], references: [id])
+  examId   Int
+  viewedAt DateTime @default(now())
+
+  @@unique([userId, examId]) // opcional: solo una entrada por examen
+}
+
