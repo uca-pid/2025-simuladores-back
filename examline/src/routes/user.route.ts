@@ -180,7 +180,7 @@ const UserRoute = (prisma: PrismaClient) => {
       res.json(updatedUser);
     } catch (error) {
       console.error('Error al actualizar usuario:', error);
-      res.status(500).json({ error: 'Error al actualizar el usuario.' });
+      res.status(500).json({ error: 'El email ya esta registrado.' });
     }
   });
 
