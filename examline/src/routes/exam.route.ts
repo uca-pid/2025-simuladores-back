@@ -1,20 +1,21 @@
 import { type PrismaClient } from "@prisma/client";
 import { Router } from "express";
+import { authenticateToken, requireRole } from "../middleware/auth.ts";
 
 const ExamRoute = (prisma: PrismaClient) => {
   const router = Router();
 
-  // POST /exams/create
-  router.post("/create", async (req, res) => {
-    const { titulo, preguntas, profesorId } = req.body;
+  // POST /exams/create (protected - professors only)
+  router.post("/create", authenticateToken, requireRole(['professor']), async (req, res) => {
+    const { titulo, preguntas } = req.body;
 
     try {
       const examen = await prisma.exam.create({
         data: {
           titulo,
-          profesorId: Number(profesorId),
+          profesorId: req.user!.userId, // Use authenticated user's ID
           preguntas: {
-            create: preguntas.map((p) => ({
+            create: preguntas.map((p: any) => ({
               texto: p.texto,
               correcta: p.correcta,
               opciones: p.opciones,
@@ -31,58 +32,97 @@ const ExamRoute = (prisma: PrismaClient) => {
     }
   });
 
-  // GET /exams?profesorId=...
-  router.get("/", async (req, res) => {
-    const profesorId = Number(req.query.profesorId);
-    if (isNaN(profesorId))
-      return res.status(400).json({ error: "ProfesorId inválido" });
+  // GET /exams (protected - get exams for authenticated professor, or all exams if system admin)
+  router.get("/", authenticateToken, async (req, res) => {
+    try {
+      let profesorId: number;
+      
+      if (req.user!.rol === 'professor') {
+        // Professors can only see their own exams
+        profesorId = req.user!.userId;
+      } else if (req.user!.rol === 'system') {
+        // System users can specify profesorId in query, or get all exams
+        const queryProfesorId = req.query.profesorId;
+        if (queryProfesorId) {
+          profesorId = Number(queryProfesorId);
+          if (isNaN(profesorId)) {
+            return res.status(400).json({ error: "ProfesorId inválido" });
+          }
+        } else {
+          // Get all exams for system users
+          const exams = await prisma.exam.findMany({
+            include: { preguntas: true, profesor: { select: { nombre: true, email: true } } },
+          });
+          return res.json(exams);
+        }
+      } else {
+        return res.status(403).json({ error: "No tienes permisos para ver exámenes" });
+      }
 
-    const exams = await prisma.exam.findMany({
-      where: { profesorId },
-      include: { preguntas: true },
-    });
+      const exams = await prisma.exam.findMany({
+        where: { profesorId },
+        include: { preguntas: true },
+      });
 
-    res.json(exams);
+      res.json(exams);
+    } catch (error) {
+      console.error('Error fetching exams:', error);
+      res.status(500).json({ error: "Error al obtener exámenes" });
+    }
   });
 
-  // GET /exams/:examId?userId=... → trae examen y registra historial si userId
-  router.get("/:examId", async (req, res) => {
+  // GET /exams/:examId → trae examen y registra historial automáticamente para estudiantes
+  router.get("/:examId", authenticateToken, async (req, res) => {
     const examId = parseInt(req.params.examId);
-    const userId = req.query.userId ? parseInt(req.query.userId as string) : undefined;
 
     if (isNaN(examId)) return res.status(400).json({ error: "examId inválido" });
 
-    const exam = await prisma.exam.findUnique({
-      where: { id: examId },
-      include: { preguntas: true },
-    });
-
-    if (!exam) return res.status(404).json({ error: "Examen no encontrado" });
-
-    // Registrar historial si hay userId
-    if (userId) {
-      await prisma.examHistory.upsert({
-        where: { userId_examId: { userId, examId } },
-        update: { viewedAt: new Date() },
-        create: { userId, examId },
+    try {
+      const exam = await prisma.exam.findUnique({
+        where: { id: examId },
+        include: { preguntas: true },
       });
-    }
 
-    res.json(exam);
+      if (!exam) return res.status(404).json({ error: "Examen no encontrado" });
+
+      // Auto-register history for students
+      if (req.user!.rol === 'student') {
+        await prisma.examHistory.upsert({
+          where: { userId_examId: { userId: req.user!.userId, examId } },
+          update: { viewedAt: new Date() },
+          create: { userId: req.user!.userId, examId },
+        });
+      }
+
+      res.json(exam);
+    } catch (error) {
+      console.error('Error fetching exam:', error);
+      res.status(500).json({ error: "Error al obtener el examen" });
+    }
   });
 
-  // GET /exams/history/:userId → obtiene historial de exámenes de un usuario
-  router.get("/history/:userId", async (req, res) => {
-    const userId = parseInt(req.params.userId);
-    if (isNaN(userId)) return res.status(400).json({ error: "userId inválido" });
+  // GET /exams/history/:userId → obtiene historial de exámenes (protected)
+  router.get("/history/:userId", authenticateToken, async (req, res) => {
+    const targetUserId = parseInt(req.params.userId);
+    if (isNaN(targetUserId)) return res.status(400).json({ error: "userId inválido" });
 
-    const history = await prisma.examHistory.findMany({
-      where: { userId },
-      include: { exam: true },
-      orderBy: { viewedAt: "desc" },
-    });
+    // Users can only see their own history, professors can see any student's history
+    if (req.user!.rol === 'student' && req.user!.userId !== targetUserId) {
+      return res.status(403).json({ error: "No puedes ver el historial de otro usuario" });
+    }
 
-    res.json(history);
+    try {
+      const history = await prisma.examHistory.findMany({
+        where: { userId: targetUserId },
+        include: { exam: true },
+        orderBy: { viewedAt: "desc" },
+      });
+
+      res.json(history);
+    } catch (error) {
+      console.error('Error fetching exam history:', error);
+      res.status(500).json({ error: "Error al obtener historial" });
+    }
   });
 
   return router;

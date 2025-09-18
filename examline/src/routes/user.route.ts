@@ -1,12 +1,14 @@
 import { type PrismaClient } from "@prisma/client";
 import { Router } from "express";
 import bcrypt from "bcryptjs";
+import { generateToken, refreshToken } from "../utils/jwt.ts";
+import { authenticateToken, requireRole } from "../middleware/auth.ts";
 
 const UserRoute = (prisma: PrismaClient) => {
   const router = Router();
 
-  // Obtener todos los usuarios
-  router.get('/', async (req, res) => {
+  // Obtener todos los usuarios (protected - professors only)
+  router.get('/', authenticateToken, requireRole(['professor', 'system']), async (req, res) => {
     try {
       const users = await prisma.user.findMany({
         select: { id: true, nombre: true, email: true, rol: true },
@@ -17,8 +19,8 @@ const UserRoute = (prisma: PrismaClient) => {
     }
   });
 
-  // Obtener un usuario por id
-  router.get('/:id', async (req, res) => {
+  // Obtener un usuario por id (protected)
+  router.get('/:id', authenticateToken, async (req, res) => {
     try {
       const user = await prisma.user.findUnique({
         where: { id: parseInt(req.params.id) },
@@ -81,12 +83,25 @@ const UserRoute = (prisma: PrismaClient) => {
         return res.status(401).json({ error: 'Contraseña incorrecta.' });
       }
 
+      // Generate JWT token
+      const tokenPayload = {
+        userId: user.id,
+        email: user.email,
+        nombre: user.nombre,
+        rol: user.rol,
+      };
+
+      const token = generateToken(tokenPayload);
+
       return res.json({
         message: 'Login exitoso',
-        userId: user.id,
-        nombre: user.nombre,
-        email: user.email,
-        rol: user.rol,
+        token, // JWT token
+        user: {
+          userId: user.id,
+          nombre: user.nombre,
+          email: user.email,
+          rol: user.rol,
+        },
       });
     } catch (error) {
       console.error('Error al verificar el usuario:', error);
@@ -94,11 +109,60 @@ const UserRoute = (prisma: PrismaClient) => {
     }
   });
 
-  // Actualizar usuario
-  router.put('/:id', async (req, res) => {
+  // Token refresh endpoint
+  router.post('/refresh-token', authenticateToken, async (req, res) => {
+    try {
+      if (!req.user) {
+        return res.status(401).json({ error: 'Usuario no autenticado' });
+      }
+
+      // Generate a new token with the same user data
+      const newToken = refreshToken(req.user);
+
+      res.json({
+        message: 'Token renovado exitosamente',
+        token: newToken,
+        user: req.user,
+      });
+    } catch (error) {
+      console.error('Error al renovar token:', error);
+      res.status(500).json({ error: 'Error al renovar el token' });
+    }
+  });
+
+  // Get current user info (protected route)
+  router.get('/me', authenticateToken, async (req, res) => {
+    try {
+      if (!req.user) {
+        return res.status(401).json({ error: 'Usuario no autenticado' });
+      }
+
+      const user = await prisma.user.findUnique({
+        where: { id: req.user.userId },
+        select: { id: true, nombre: true, email: true, rol: true },
+      });
+
+      if (!user) {
+        return res.status(404).json({ error: 'Usuario no encontrado' });
+      }
+
+      res.json(user);
+    } catch (error) {
+      console.error('Error al obtener información del usuario:', error);
+      res.status(500).json({ error: 'Error al obtener información del usuario' });
+    }
+  });
+
+  // Actualizar usuario (protected - users can only update themselves, professors can update anyone)
+  router.put('/:id', authenticateToken, async (req, res) => {
     const { nombre, email, password, rol } = req.body;
+    const targetUserId = parseInt(req.params.id);
 
     try {
+      // Users can only update themselves, unless they're professors
+      if (req.user!.rol !== 'professor' && req.user!.userId !== targetUserId) {
+        return res.status(403).json({ error: 'No tienes permisos para actualizar este usuario' });
+      }
       const dataToUpdate: any = {};
       if (nombre) dataToUpdate.nombre = nombre;
       if (email) dataToUpdate.email = email;
@@ -108,7 +172,7 @@ const UserRoute = (prisma: PrismaClient) => {
       }
 
       const updatedUser = await prisma.user.update({
-        where: { id: parseInt(req.params.id) },
+        where: { id: targetUserId },
         data: dataToUpdate,
         select: { id: true, nombre: true, email: true, rol: true },
       });
