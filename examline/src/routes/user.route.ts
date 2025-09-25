@@ -153,36 +153,50 @@ const UserRoute = (prisma: PrismaClient) => {
     }
   });
 
-  // Actualizar usuario (protected - users can only update themselves, professors can update anyone)
   router.put('/:id', authenticateToken, async (req, res) => {
-    const { nombre, email, password, rol } = req.body;
-    const targetUserId = parseInt(req.params.id);
+  const { nombre, password, currentPassword } = req.body;
+  const targetUserId = parseInt(req.params.id);
 
-    try {
-      // Users can only update themselves, unless they're professors
-      if (req.user!.rol !== 'professor' && req.user!.userId !== targetUserId) {
-        return res.status(403).json({ error: 'No tienes permisos para actualizar este usuario' });
-      }
-      const dataToUpdate: any = {};
-      if (nombre) dataToUpdate.nombre = nombre;
-      if (email) dataToUpdate.email = email;
-      if (rol) dataToUpdate.rol = rol;
-      if (password && password.trim() !== "") {
-        dataToUpdate.password = await bcrypt.hash(password, 10);
-      }
-
-      const updatedUser = await prisma.user.update({
-        where: { id: targetUserId },
-        data: dataToUpdate,
-        select: { id: true, nombre: true, email: true, rol: true },
-      });
-
-      res.json(updatedUser);
-    } catch (error) {
-      console.error('Error al actualizar usuario:', error);
-      res.status(500).json({ error: 'El email ya esta registrado.' });
+  try {
+    // Todos solo pueden actualizar su propio perfil
+    if (req.user!.userId !== targetUserId) {
+      return res.status(403).json({ error: 'No tienes permisos para actualizar este usuario' });
     }
-  });
+
+    const user = await prisma.user.findUnique({ where: { id: targetUserId } });
+    if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
+
+    const dataToUpdate: any = {};
+    if (nombre) dataToUpdate.nombre = nombre;
+
+    // Cambiar contraseña
+    if (password && password.trim() !== "") {
+      if (!currentPassword) {
+        return res.status(400).json({ error: 'Debe ingresar la contraseña actual para cambiarla' });
+      }
+
+      const isCurrentPasswordCorrect = await bcrypt.compare(currentPassword, user.password);
+      if (!isCurrentPasswordCorrect) {
+        return res.status(400).json({ error: 'Contraseña actual incorrecta' });
+      }
+
+      dataToUpdate.password = await bcrypt.hash(password, 10);
+    }
+
+    const updatedUser = await prisma.user.update({
+      where: { id: targetUserId },
+      data: dataToUpdate,
+      select: { id: true, nombre: true, email: true, rol: true },
+    });
+
+    res.json(updatedUser);
+  } catch (error) {
+    console.error('Error al actualizar usuario:', error);
+    res.status(500).json({ error: 'Error actualizando usuario' });
+  }
+});
+
+
 
   // Eliminar usuario
   /*router.delete('/:id', async (req, res) => {
