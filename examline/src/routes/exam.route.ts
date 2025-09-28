@@ -34,42 +34,42 @@ const ExamRoute = (prisma: PrismaClient) => {
 
   // GET /exams (protected - get exams for authenticated professor, or all exams if system admin)
   router.get("/", authenticateToken, async (req, res) => {
-    try {
-      let profesorId: number;
-      
-      if (req.user!.rol === 'professor') {
-        // Professors can only see their own exams
-        profesorId = req.user!.userId;
-      } else if (req.user!.rol === 'system') {
-        // System users can specify profesorId in query, or get all exams
-        const queryProfesorId = req.query.profesorId;
-        if (queryProfesorId) {
-          profesorId = Number(queryProfesorId);
-          if (isNaN(profesorId)) {
-            return res.status(400).json({ error: "ProfesorId inválido" });
+      try {
+        let profesorId: number;
+        
+        if (req.user!.rol === 'professor') {
+          // Professors can only see their own exams
+          profesorId = req.user!.userId;
+        } else if (req.user!.rol === 'system') {
+          // System users can specify profesorId in query, or get all exams
+          const queryProfesorId = req.query.profesorId;
+          if (queryProfesorId) {
+            profesorId = Number(queryProfesorId);
+            if (isNaN(profesorId)) {
+              return res.status(400).json({ error: "ProfesorId inválido" });
+            }
+          } else {
+            // Get all exams for system users
+            const exams = await prisma.exam.findMany({
+              include: { preguntas: true, profesor: { select: { nombre: true, email: true } } },
+            });
+            return res.json(exams);
           }
         } else {
-          // Get all exams for system users
-          const exams = await prisma.exam.findMany({
-            include: { preguntas: true, profesor: { select: { nombre: true, email: true } } },
-          });
-          return res.json(exams);
+          return res.status(403).json({ error: "No tienes permisos para ver exámenes" });
         }
-      } else {
-        return res.status(403).json({ error: "No tienes permisos para ver exámenes" });
+  
+        const exams = await prisma.exam.findMany({
+          where: { profesorId },
+          include: { preguntas: true },
+        });
+  
+        res.json(exams);
+      } catch (error) {
+        console.error('Error fetching exams:', error);
+        res.status(500).json({ error: "Error al obtener exámenes" });
       }
-
-      const exams = await prisma.exam.findMany({
-        where: { profesorId },
-        include: { preguntas: true },
-      });
-
-      res.json(exams);
-    } catch (error) {
-      console.error('Error fetching exams:', error);
-      res.status(500).json({ error: "Error al obtener exámenes" });
-    }
-  });
+    });
 
   // GET /exams/:examId → trae examen y registra historial automáticamente para estudiantes
   router.get("/:examId", authenticateToken, async (req, res) => {
