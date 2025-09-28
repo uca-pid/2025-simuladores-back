@@ -47,13 +47,14 @@ const UserRoute = (prisma: PrismaClient) => {
         return res.status(400).json({ error: "El email ya está registrado." });
       }
 
-      const hashedPassword = await bcrypt.hash(password, 10);
+      // Password is already client-side hashed, now hash it again with bcrypt
+      const doubleHashedPassword = await bcrypt.hash(password, 10);
 
       const user = await prisma.user.create({
         data: {
           nombre,
           email,
-          password: hashedPassword,
+          password: doubleHashedPassword,
           rol: rol || "student", // 👈 por defecto student
         },
         select: { id: true, nombre: true, email: true, rol: true },
@@ -77,6 +78,7 @@ const UserRoute = (prisma: PrismaClient) => {
         return res.status(404).json({ error: 'El email no está registrado.' });
       }
 
+      // Password comes already client-side hashed, compare with stored double-hashed password
       const isPasswordCorrect = await bcrypt.compare(password, user.password);
 
       if (!isPasswordCorrect) {
@@ -175,11 +177,13 @@ const UserRoute = (prisma: PrismaClient) => {
         return res.status(400).json({ error: 'Debe ingresar la contraseña actual para cambiarla' });
       }
 
+      // Both passwords come client-side hashed, compare with stored double-hashed password
       const isCurrentPasswordCorrect = await bcrypt.compare(currentPassword, user.password);
       if (!isCurrentPasswordCorrect) {
         return res.status(400).json({ error: 'Contraseña actual incorrecta' });
       }
 
+      // Password is already client-side hashed, now hash it again with bcrypt
       dataToUpdate.password = await bcrypt.hash(password, 10);
     }
 
@@ -233,7 +237,7 @@ router.delete('/:id', async (req, res) => {
 
     // Buscar o crear el usuario especial "Backuser"
     let backuser = await prisma.user.findUnique({
-      where: { email: "backuser@system.com" }, // 👈 le damos un email fijo
+      where: { email: "backuser@system.com" }, 
     });
 
     if (!backuser) {
