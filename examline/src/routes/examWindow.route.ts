@@ -5,69 +5,70 @@ import { authenticateToken, requireRole } from "../middleware/auth.ts";
 const ExamWindowRoute = (prisma: PrismaClient) => {
   const router = Router();
 
-  // Crear ventana de examen (solo profesores)
   router.post('/', authenticateToken, requireRole(['professor']), async (req, res) => {
-    const { examId, fechaInicio, duracion, modalidad, cupoMaximo, notas } = req.body;
+  const { examId, fechaInicio, duracion, modalidad, cupoMaximo, notas } = req.body;
 
-    try {
-      // Convertir examId a número
-      const examIdNumber = parseInt(examId);
-      if (isNaN(examIdNumber)) {
-        return res.status(400).json({ error: 'examId debe ser un número válido' });
-      }
+  try {
+    // Convertir a número lo que corresponde
+    const examIdNumber = parseInt(examId);
+    const duracionNumber = parseInt(duracion);
+    const cupoMaximoNumber = parseInt(cupoMaximo);
 
-      // Verificar que el examen existe y pertenece al profesor
-      const exam = await prisma.exam.findFirst({
-        where: {
-          id: examIdNumber,
-          profesorId: req.user!.userId
-        }
-      });
-
-      if (!exam) {
-        return res.status(404).json({ error: 'Examen no encontrado o no tienes permisos para modificarlo' });
-      }
-
-      // Validar datos
-      if (!fechaInicio || !duracion || !modalidad || !cupoMaximo) {
-        return res.status(400).json({ error: 'Faltan campos requeridos' });
-      }
-
-      if (!['remoto', 'presencial'].includes(modalidad)) {
-        return res.status(400).json({ error: 'Modalidad debe ser "remoto" o "presencial"' });
-      }
-
-      if (cupoMaximo < 1) {
-        return res.status(400).json({ error: 'El cupo máximo debe ser mayor a 0' });
-      }
-
-      if (duracion < 1) {
-        return res.status(400).json({ error: 'La duración debe ser mayor a 0 minutos' });
-      }
-
-      const examWindow = await prisma.examWindow.create({
-        data: {
-          examId: examIdNumber,
-          fechaInicio: new Date(fechaInicio),
-          duracion,
-          modalidad,
-          cupoMaximo,
-          notas: notas || null
-        },
-        include: {
-          exam: {
-            select: { id: true, titulo: true }
-          },
-          inscripciones: true
-        }
-      });
-
-      res.status(201).json(examWindow);
-    } catch (error: any) {
-      console.error('Error creando ventana de examen:', error);
-      res.status(500).json({ error: 'Error interno del servidor' });
+    if (isNaN(examIdNumber)) {
+      return res.status(400).json({ error: 'examId debe ser un número válido' });
     }
-  });
+
+    // Verificar que el examen existe y pertenece al profesor
+    const exam = await prisma.exam.findFirst({
+      where: {
+        id: examIdNumber,
+        profesorId: req.user!.userId
+      }
+    });
+
+    if (!exam) {
+      return res.status(404).json({ error: 'Examen no encontrado o no tienes permisos para modificarlo' });
+    }
+
+    // Validar datos
+    if (!fechaInicio || !duracionNumber || !modalidad || !cupoMaximoNumber) {
+      return res.status(400).json({ error: 'Faltan campos requeridos' });
+    }
+
+    if (!['remoto', 'presencial'].includes(modalidad)) {
+      return res.status(400).json({ error: 'Modalidad debe ser "remoto" o "presencial"' });
+    }
+
+    if (cupoMaximoNumber < 1) {
+      return res.status(400).json({ error: 'El cupo máximo debe ser mayor a 0' });
+    }
+
+    if (duracionNumber < 1) {
+      return res.status(400).json({ error: 'La duración debe ser mayor a 0 minutos' });
+    }
+
+    const examWindow = await prisma.examWindow.create({
+      data: {
+        examId: examIdNumber,
+        fechaInicio: new Date(fechaInicio),
+        duracion: duracionNumber,
+        modalidad,
+        cupoMaximo: cupoMaximoNumber,
+        notas: notas || null
+      },
+      include: {
+        exam: { select: { id: true, titulo: true } },
+        inscripciones: true
+      }
+    });
+
+    res.status(201).json(examWindow);
+  } catch (error: any) {
+    console.error('Error creando ventana de examen:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
 
   // Obtener ventanas de examen del profesor
   router.get('/profesor', authenticateToken, requireRole(['professor']), async (req, res) => {
