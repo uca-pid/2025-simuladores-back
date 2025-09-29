@@ -312,6 +312,124 @@ router.get('/disponibles', authenticateToken, requireRole(['student']), async (r
     }
   });
 
+  // Alternar estado de inscripciones (Programada <-> Cerrada a inscripciones)
+  router.patch('/:id/toggle-inscripciones', authenticateToken, requireRole(['professor']), async (req, res) => {
+    const windowId = parseInt(req.params.id);
+
+    try {
+      // Verificar que la ventana existe y pertenece al profesor
+      const existingWindow = await prisma.examWindow.findFirst({
+        where: {
+          id: windowId,
+          exam: {
+            profesorId: req.user!.userId
+          }
+        }
+      });
+
+      if (!existingWindow) {
+        return res.status(404).json({ error: 'Ventana no encontrada o no tienes permisos' });
+      }
+
+      // Solo permitir toggle entre 'programada' y 'cerrada_inscripciones'
+      if (!['programada', 'cerrada_inscripciones'].includes(existingWindow.estado)) {
+        return res.status(400).json({ 
+          error: 'Solo se puede alternar inscripciones en ventanas programadas o cerradas a inscripciones' 
+        });
+      }
+
+      const newEstado = existingWindow.estado === 'programada' ? 'cerrada_inscripciones' : 'programada';
+
+      const updatedWindow = await prisma.examWindow.update({
+        where: { id: windowId },
+        data: { estado: newEstado },
+        include: {
+          exam: { select: { id: true, titulo: true } },
+          inscripciones: {
+            include: {
+              user: { select: { id: true, nombre: true, email: true } }
+            }
+          }
+        }
+      });
+
+      res.json({ 
+        success: true, 
+        estado: updatedWindow.estado,
+        message: `Inscripciones ${newEstado === 'programada' ? 'abiertas' : 'cerradas'}`,
+        window: updatedWindow
+      });
+    } catch (error: any) {
+      console.error('Error alternando inscripciones:', error);
+      res.status(500).json({ error: 'Error interno del servidor' });
+    }
+  });
+
+  // Actualizar estados automáticamente basado en fechas y horarios
+  router.patch('/update-statuses', authenticateToken, requireRole(['professor']), async (req, res) => {
+    try {
+      const now = new Date();
+      
+      // Obtener todas las ventanas del profesor
+      const examWindows = await prisma.examWindow.findMany({
+        where: {
+          exam: {
+            profesorId: req.user!.userId
+          }
+        }
+      });
+
+      let updatedWindows = [];
+      
+      for (const window of examWindows) {
+        const startDate = new Date(window.fechaInicio);
+        const endDate = new Date(startDate.getTime() + (window.duracion * 60 * 1000));
+        let newStatus = window.estado;
+        let shouldUpdate = false;
+
+        // Lógica de transición automática
+        if (now >= startDate && now <= endDate && window.estado !== 'en_curso' && window.estado !== 'finalizada') {
+          // Si está en el horario del examen y no está ya en curso o finalizada
+          newStatus = 'en_curso';
+          shouldUpdate = true;
+        } else if (now > endDate && window.estado !== 'finalizada') {
+          // Si ya pasó el tiempo del examen
+          newStatus = 'finalizada';
+          shouldUpdate = true;
+        }
+
+        // Actualizar si hay cambio
+        if (shouldUpdate) {
+          const updatedWindow = await prisma.examWindow.update({
+            where: { id: window.id },
+            data: { estado: newStatus },
+            include: {
+              exam: { select: { id: true, titulo: true } }
+            }
+          });
+          
+          updatedWindows.push({
+            id: window.id,
+            titulo: updatedWindow.exam.titulo,
+            estadoAnterior: window.estado,
+            estadoNuevo: newStatus,
+            fechaInicio: window.fechaInicio
+          });
+        }
+      }
+
+      res.json({ 
+        success: true, 
+        message: `Se actualizaron ${updatedWindows.length} ventanas`,
+        updatedCount: updatedWindows.length,
+        updatedWindows: updatedWindows
+      });
+    } catch (error: any) {
+      console.error('Error actualizando estados:', error);
+      res.status(500).json({ error: 'Error interno del servidor' });
+    }
+  });
+
   return router;
 };
 
