@@ -102,89 +102,89 @@ const ExamWindowRoute = (prisma: PrismaClient) => {
     }
   });
 
-  // Obtener ventanas disponibles para estudiantes
-  router.get('/disponibles', authenticateToken, requireRole(['student']), async (req, res) => {
-    const { materia, profesor, fecha } = req.query;
+// Obtener ventanas disponibles para estudiantes
+router.get('/disponibles', authenticateToken, requireRole(['student']), async (req, res) => {
+  const { materia, profesor, fecha } = req.query;
 
-    try {
-      const whereClause: any = {
-        activa: true,
-        estado: 'programada',
-        fechaInicio: {
-          gt: new Date() // solo ventanas futuras
+  try {
+    const whereClause: any = {
+      activa: true,
+      estado: 'programada',
+      fechaInicio: {
+        gt: new Date() // solo ventanas futuras
+      }
+    };
+
+    // Filtro por materia
+    if (materia) {
+      whereClause.exam = {
+        titulo: {
+          contains: materia as string // ya no usamos 'mode'
         }
       };
+    }
 
-      // Filtros opcionales
-      if (materia) {
-        whereClause.exam = {
-          ...whereClause.exam,
-          titulo: {
-            contains: materia as string,
-            mode: 'insensitive'
+    // Filtro por profesor
+    if (profesor) {
+      whereClause.exam = {
+        ...whereClause.exam,
+        profesor: {
+          nombre: {
+            contains: profesor as string // ya no usamos 'mode'
           }
-        };
-      }
+        }
+      };
+    }
 
-      if (profesor) {
-        whereClause.exam = {
-          ...whereClause.exam,
-          profesor: {
-            nombre: {
-              contains: profesor as string,
-              mode: 'insensitive'
+    // Filtro por fecha
+    if (fecha) {
+      const fechaFiltro = new Date(fecha as string);
+      const fechaInicio = new Date(fechaFiltro);
+      fechaInicio.setHours(0, 0, 0, 0);
+      const fechaFin = new Date(fechaFiltro);
+      fechaFin.setHours(23, 59, 59, 999);
+
+      whereClause.fechaInicio = {
+        gte: fechaInicio,
+        lte: fechaFin
+      };
+    }
+
+    const examWindows = await prisma.examWindow.findMany({
+      where: whereClause,
+      include: {
+        exam: {
+          select: { 
+            id: true, 
+            titulo: true,
+            profesor: {
+              select: { nombre: true }
             }
-          }
-        };
-      }
-
-      if (fecha) {
-        const fechaFiltro = new Date(fecha as string);
-        const fechaInicio = new Date(fechaFiltro);
-        fechaInicio.setHours(0, 0, 0, 0);
-        const fechaFin = new Date(fechaFiltro);
-        fechaFin.setHours(23, 59, 59, 999);
-
-        whereClause.fechaInicio = {
-          gte: fechaInicio,
-          lte: fechaFin
-        };
-      }
-
-      const examWindows = await prisma.examWindow.findMany({
-        where: whereClause,
-        include: {
-          exam: {
-            select: { 
-              id: true, 
-              titulo: true,
-              profesor: {
-                select: { nombre: true }
-              }
-            }
-          },
-          inscripciones: {
-            select: { id: true, userId: true }
           }
         },
-        orderBy: {
-          fechaInicio: 'asc'
+        inscripciones: {
+          select: { id: true, userId: true }
         }
-      });
+      },
+      orderBy: {
+        fechaInicio: 'asc'
+      }
+    });
 
-      // Agregar información de cupos disponibles y si el usuario ya está inscrito
-      const examWindowsWithInfo = examWindows.map(window => ({
-        ...window,
-        cupoDisponible: window.cupoMaximo - window.inscripciones.length,
-        yaInscrito: window.inscripciones.some(ins => ins.userId === req.user!.userId)
-      }));
+    // Agregar información de cupos disponibles y si el usuario ya está inscrito
+    const examWindowsWithInfo = examWindows.map(window => ({
+      ...window,
+      cupoDisponible: window.cupoMaximo - window.inscripciones.length,
+      yaInscrito: window.inscripciones.some(ins => ins.userId === req.user!.userId)
+    }));
 
-      res.json(examWindowsWithInfo);
-    } catch (error: any) {
-      console.error('Error obteniendo ventanas disponibles:', error);
-      res.status(500).json({ error: 'Error interno del servidor' });
-    }
-  });
+    res.json(examWindowsWithInfo);
+  } catch (error: any) {
+    console.error('Error obteniendo ventanas disponibles:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
 
   // Actualizar ventana de examen
   router.put('/:id', authenticateToken, requireRole(['professor']), async (req, res) => {

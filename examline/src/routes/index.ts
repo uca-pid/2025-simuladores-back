@@ -3,6 +3,7 @@ import { type Express } from "express"
 import UserRoute from "./user.route"
 import ExamRoute from "./exam.route"
 import ExamWindowRoute from "./examWindow.route"
+import InscriptionRoute from "./inscription.route"
 
 const addRoutes = (app: Express, prisma: PrismaClient) => {
     app.get('/', (req, res) => {
@@ -14,6 +15,8 @@ const addRoutes = (app: Express, prisma: PrismaClient) => {
     app.use('/users', UserRoute(prisma))
     app.use('/exams', ExamRoute(prisma))
     app.use('/exam-windows', ExamWindowRoute(prisma))
+    app.use('/inscriptions', InscriptionRoute(prisma))
+
 }
 
 export default addRoutes
