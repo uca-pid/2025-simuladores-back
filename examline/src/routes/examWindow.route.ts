@@ -2,6 +2,34 @@ import { type PrismaClient } from "@prisma/client";
 import { Router } from "express";
 import { authenticateToken, requireRole } from "../middleware/auth.ts";
 
+function parseLocalDate(dateString: string): Date {
+  let fecha: string, hora: string;
+
+  if (dateString.includes("T")) {
+    [fecha, hora] = dateString.split("T");
+  } else {
+    [fecha, hora] = dateString.split(" ");
+  }
+
+  const [year, month, day] = fecha.split("-").map(Number);
+  const [hours, minutes] = hora.split(":").map(Number);
+
+  return new Date(year, month - 1, day, hours, minutes);
+}
+
+// Convierte string de filtro a Date en hora local
+function parseFiltroFecha(dateString: string): Date {
+  if (!dateString) throw new Error("No se recibió fecha válida");
+
+  // Solo consideramos la parte de fecha, ignorando hora si existe
+  const [fecha] = dateString.split("T");
+  const [year, month, day] = fecha.split("-").map(Number);
+
+  return new Date(year, month - 1, day, 0, 0, 0, 0);
+}
+
+
+
 const ExamWindowRoute = (prisma: PrismaClient) => {
   const router = Router();
 
@@ -9,65 +37,74 @@ const ExamWindowRoute = (prisma: PrismaClient) => {
   const { examId, fechaInicio, duracion, modalidad, cupoMaximo, notas } = req.body;
 
   try {
-    // Convertir a número lo que corresponde
-    const examIdNumber = parseInt(examId);
-    const duracionNumber = parseInt(duracion);
-    const cupoMaximoNumber = parseInt(cupoMaximo);
+        const examIdNumber = parseInt(examId);
+        const duracionNumber = parseInt(duracion);
+        const cupoMaximoNumber = parseInt(cupoMaximo);
 
-    if (isNaN(examIdNumber)) {
-      return res.status(400).json({ error: 'examId debe ser un número válido' });
-    }
+        if (isNaN(examIdNumber)) {
+          return res
+            .status(400)
+            .json({ error: "examId debe ser un número válido" });
+        }
 
-    // Verificar que el examen existe y pertenece al profesor
-    const exam = await prisma.exam.findFirst({
-      where: {
-        id: examIdNumber,
-        profesorId: req.user!.userId
+        const exam = await prisma.exam.findFirst({
+          where: { id: examIdNumber, profesorId: req.user!.userId },
+        });
+
+        if (!exam) {
+          return res.status(404).json({
+            error: "Examen no encontrado o no tienes permisos para modificarlo",
+          });
+        }
+
+        if (!fechaInicio || !duracionNumber || !modalidad || !cupoMaximoNumber) {
+          return res
+            .status(400)
+            .json({ error: "Faltan campos requeridos" });
+        }
+
+        if (!["remoto", "presencial"].includes(modalidad)) {
+          return res
+            .status(400)
+            .json({ error: 'Modalidad debe ser "remoto" o "presencial"' });
+        }
+
+        if (cupoMaximoNumber < 1) {
+          return res
+            .status(400)
+            .json({ error: "El cupo máximo debe ser mayor a 0" });
+        }
+
+        if (duracionNumber < 1) {
+          return res
+            .status(400)
+            .json({ error: "La duración debe ser mayor a 0 minutos" });
+        }
+
+        const fechaInicioDate = parseLocalDate(fechaInicio);
+
+        const examWindow = await prisma.examWindow.create({
+          data: {
+            examId: examIdNumber,
+            fechaInicio: fechaInicioDate,
+            duracion: duracionNumber,
+            modalidad,
+            cupoMaximo: cupoMaximoNumber,
+            notas: notas || null,
+          },
+          include: {
+            exam: { select: { id: true, titulo: true } },
+            inscripciones: true,
+          },
+        });
+
+        res.status(201).json(examWindow);
+      } catch (error: any) {
+        console.error("Error creando ventana de examen:", error);
+        res.status(500).json({ error: "Error interno del servidor" });
       }
-    });
-
-    if (!exam) {
-      return res.status(404).json({ error: 'Examen no encontrado o no tienes permisos para modificarlo' });
     }
-
-    // Validar datos
-    if (!fechaInicio || !duracionNumber || !modalidad || !cupoMaximoNumber) {
-      return res.status(400).json({ error: 'Faltan campos requeridos' });
-    }
-
-    if (!['remoto', 'presencial'].includes(modalidad)) {
-      return res.status(400).json({ error: 'Modalidad debe ser "remoto" o "presencial"' });
-    }
-
-    if (cupoMaximoNumber < 1) {
-      return res.status(400).json({ error: 'El cupo máximo debe ser mayor a 0' });
-    }
-
-    if (duracionNumber < 1) {
-      return res.status(400).json({ error: 'La duración debe ser mayor a 0 minutos' });
-    }
-
-    const examWindow = await prisma.examWindow.create({
-      data: {
-        examId: examIdNumber,
-        fechaInicio: new Date(fechaInicio),
-        duracion: duracionNumber,
-        modalidad,
-        cupoMaximo: cupoMaximoNumber,
-        notas: notas || null
-      },
-      include: {
-        exam: { select: { id: true, titulo: true } },
-        inscripciones: true
-      }
-    });
-
-    res.status(201).json(examWindow);
-  } catch (error: any) {
-    console.error('Error creando ventana de examen:', error);
-    res.status(500).json({ error: 'Error interno del servidor' });
-  }
-});
+  );
 
 
   // Obtener ventanas de examen del profesor
@@ -120,7 +157,7 @@ router.get('/disponibles', authenticateToken, requireRole(['student']), async (r
     if (materia) {
       whereClause.exam = {
         titulo: {
-          contains: materia as string // ya no usamos 'mode'
+          contains: materia as string
         }
       };
     }
@@ -131,7 +168,7 @@ router.get('/disponibles', authenticateToken, requireRole(['student']), async (r
         ...whereClause.exam,
         profesor: {
           nombre: {
-            contains: profesor as string // ya no usamos 'mode'
+            contains: profesor as string
           }
         }
       };
@@ -139,17 +176,17 @@ router.get('/disponibles', authenticateToken, requireRole(['student']), async (r
 
     // Filtro por fecha
     if (fecha) {
-      const fechaFiltro = new Date(fecha as string);
-      const fechaInicio = new Date(fechaFiltro);
-      fechaInicio.setHours(0, 0, 0, 0);
-      const fechaFin = new Date(fechaFiltro);
-      fechaFin.setHours(23, 59, 59, 999);
+  const fechaInicio = parseFiltroFecha(fecha as string);
 
-      whereClause.fechaInicio = {
-        gte: fechaInicio,
-        lte: fechaFin
-      };
-    }
+  const fechaFin = new Date(fechaInicio);
+  fechaFin.setHours(23, 59, 59, 999);
+
+
+  whereClause.fechaInicio = {
+    gte: fechaInicio,
+    lte: fechaFin
+  };
+}
 
     const examWindows = await prisma.examWindow.findMany({
       where: whereClause,
@@ -172,7 +209,6 @@ router.get('/disponibles', authenticateToken, requireRole(['student']), async (r
       }
     });
 
-    // Agregar información de cupos disponibles y si el usuario ya está inscrito
     const examWindowsWithInfo = examWindows.map(window => ({
       ...window,
       cupoDisponible: window.cupoMaximo - window.inscripciones.length,
@@ -181,10 +217,11 @@ router.get('/disponibles', authenticateToken, requireRole(['student']), async (r
 
     res.json(examWindowsWithInfo);
   } catch (error: any) {
-    console.error('Error obteniendo ventanas disponibles:', error);
+    console.error('❌ Error obteniendo ventanas disponibles:', error);
     res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
+
 
 
   // Actualizar ventana de examen
