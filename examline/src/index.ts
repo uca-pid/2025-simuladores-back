@@ -22,7 +22,16 @@ const setupSocketIO = async () => {
         origin: process.env.FRONTEND_URL || "http://localhost:3000",
         methods: ["GET", "POST"],
         credentials: true
-      }
+      },
+      // 🚀 CONFIGURACIONES ULTRA-BAJA LATENCIA (milisegundos)
+      pingTimeout: 60000,         // 60s timeout para mantener conexión
+      pingInterval: 5000,         // 5s ping para latencia mínima
+      upgradeTimeout: 3000,       // 3s timeout rápido para upgrade
+      maxHttpBufferSize: 512,     // Buffer ultra-pequeño (512 bytes)
+      allowEIO3: true,           // Compatibilidad Engine.IO v3
+      transports: ['websocket'], // SOLO WebSocket - máxima velocidad
+      allowUpgrades: true,       // Permitir upgrades rápidos
+      cookie: false             // Sin cookies - reducir overhead
     });
 
     // Middleware de autenticación para Socket.IO
@@ -34,6 +43,9 @@ const setupSocketIO = async () => {
         }
 
         const decoded = verifyToken(token);
+        if (!decoded) {
+          return next(new Error('Token verification failed'));
+        }
         socket.userId = decoded.userId;
         socket.userRole = decoded.rol;
         next();
@@ -51,13 +63,37 @@ const setupSocketIO = async () => {
         if (socket.userRole === 'professor') {
           const roomName = `professor_${socket.userId}`;
           socket.join(roomName);
-          console.log(`👨‍🏫 Profesor ${socket.userId} se unió a sala: ${roomName}`);
+          console.log(`👨‍🏫 Profesor ${socket.userId} se unió a sala ULTRA-RÁPIDA: ${roomName}`);
         }
       });
+
+      // 🚀 Sistema de medición de latencia en tiempo real
+      socket.on('ping', (timestamp: number) => {
+        const receiveTime = Date.now();
+        const processingStart = process.hrtime.bigint();
+        
+        // Responder inmediatamente con pong
+        socket.emit('pong', {
+          clientTimestamp: timestamp,
+          serverReceiveTime: receiveTime,
+          serverSendTime: Date.now(),
+          processingTime: Number(process.hrtime.bigint() - processingStart) / 1000000
+        });
+      });
+
+      // Enviar ping periódico para medir latencia
+      const latencyInterval = setInterval(() => {
+        if (socket.connected) {
+          socket.emit('latency_ping', Date.now());
+        }
+      }, 10000); // Cada 10 segundos
 
       // Manejar desconexión
       socket.on('disconnect', () => {
         console.log(`🔴 Usuario desconectado: ${socket.userId}`);
+        if (latencyInterval) {
+          clearInterval(latencyInterval);
+        }
       });
     });
 

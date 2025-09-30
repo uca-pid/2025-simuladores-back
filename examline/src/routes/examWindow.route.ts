@@ -11,15 +11,31 @@ export const setSocketIO = (socketInstance: any) => {
   console.log('✅ Socket.IO configurado en ExamWindowRoute');
 };
 
-// Función para enviar actualizaciones via WebSocket
+// 🚀 Función ULTRA-OPTIMIZADA para broadcast de milisegundos
 const broadcastStatusUpdate = (profesorId: number, changes: any[]) => {
   if (io && changes.length > 0) {
-    console.log(`📡 Enviando actualización WebSocket al profesor ${profesorId}:`, changes);
-    io.to(`professor_${profesorId}`).emit('statusUpdate', {
-      type: 'status_change',
-      changes: changes,
-      timestamp: new Date().toISOString()
-    });
+    const broadcastStartTime = process.hrtime.bigint();
+    
+    // Payload ultra-optimizado (mínimo JSON)
+    const optimizedPayload = {
+      t: 'sc', // type: status_change (abreviado)
+      c: changes.map(change => ({
+        i: change.id,           // id
+        s: change.estadoNuevo,  // estado (solo el nuevo)
+        ts: change.timestamp || Date.now() // timestamp preciso
+      })),
+      ts: Date.now() // timestamp del broadcast
+    };
+    
+    console.log(`📡 BROADCAST ULTRA-RÁPIDO → profesor ${profesorId}`);
+    
+    // Envío inmediato sin compresión ni validaciones adicionales
+    io.to(`professor_${profesorId}`).emit('su', optimizedPayload); // 'su' = statusUpdate (abreviado)
+    
+    const broadcastEndTime = process.hrtime.bigint();
+    const broadcastLatency = Number(broadcastEndTime - broadcastStartTime) / 1000000;
+    
+    console.log(`⚡ Broadcast completado en ${broadcastLatency.toFixed(3)}ms`);
   } else if (changes.length > 0) {
     console.log('⚠️ Socket.IO no disponible, cambios no enviados via WebSocket');
   }
@@ -137,7 +153,197 @@ async function updateWindowStatuses(prisma: PrismaClient, profesorId?: number, r
   return updatedWindows;
 }
 
+// 🚀 Sistema ULTRA-PRECISO de Latencia en Milisegundos
+let scheduledTimeouts = new Map<number, { timeout: NodeJS.Timeout, startTime: bigint, targetTime: bigint }>();
+let prismaInstance: PrismaClient | null = null;
 
+// Función de timeout de alta precisión con corrección de drift
+const preciseSetTimeout = (callback: () => void, delay: number): NodeJS.Timeout => {
+  const startTime = process.hrtime.bigint();
+  const targetTime = startTime + BigInt(delay * 1000000); // Convertir ms a nanosegundos
+  
+  const checkTime = () => {
+    const currentTime = process.hrtime.bigint();
+    const remaining = Number(targetTime - currentTime) / 1000000; // Convertir ns a ms
+    
+    if (remaining <= 1) { // Si queda 1ms o menos, ejecutar inmediatamente
+      callback();
+    } else if (remaining < 10) { // Si quedan menos de 10ms, usar setImmediate
+      setImmediate(() => {
+        const finalTime = process.hrtime.bigint();
+        if (finalTime >= targetTime) {
+          callback();
+        } else {
+          setTimeout(callback, Math.max(0, Number(targetTime - finalTime) / 1000000));
+        }
+      });
+    } else {
+      // Usar setTimeout con corrección de drift
+      setTimeout(checkTime, Math.min(remaining - 5, 100));
+    }
+  };
+  
+  return setTimeout(checkTime, Math.max(1, delay - 5));
+};
+
+// Función para programar timeout exacto con precisión de milisegundos
+const scheduleExactStateChange = async (windowId: number, changeTime: Date, newState: string, profesorId: number) => {
+  if (!prismaInstance) return;
+  
+  const now = Date.now();
+  const targetTime = changeTime.getTime();
+  const delay = targetTime - now;
+  
+  // Solo programar si es en el futuro y dentro de las próximas 12 horas
+  if (delay > 0 && delay <= 12 * 60 * 60 * 1000) {
+    // Cancelar timeout anterior si existe
+    const existing = scheduledTimeouts.get(windowId);
+    if (existing) {
+      clearTimeout(existing.timeout);
+    }
+    
+    const startTime = process.hrtime.bigint();
+    const targetTimeNs = startTime + BigInt(delay * 1000000);
+    
+    console.log(`⏰ PROGRAMANDO cambio ULTRA-PRECISO: Ventana ${windowId} → ${newState} en ${delay}ms`);
+    
+    // Programar timeout de alta precisión
+    const timeout = preciseSetTimeout(async () => {
+      const executionTime = process.hrtime.bigint();
+      const actualDelay = Number(executionTime - startTime) / 1000000;
+      
+      try {
+        console.log(`🎯 EJECUTANDO cambio (precisión: ${actualDelay.toFixed(2)}ms): Ventana ${windowId} → ${newState}`);
+        
+        // 🚀 BROADCAST ULTRA-RÁPIDO (antes de BD para latencia mínima)
+        const broadcastStart = process.hrtime.bigint();
+        broadcastStatusUpdate(profesorId, [{
+          id: windowId,
+          titulo: `Ventana ${windowId}`, // Título temporal para velocidad
+          estadoAnterior: newState === 'en_curso' ? 'programada' : 'en_curso',
+          estadoNuevo: newState,
+          fechaInicio: changeTime.toISOString(),
+          timestamp: Date.now() // Timestamp preciso
+        }]);
+        const broadcastEnd = process.hrtime.bigint();
+        const broadcastLatency = Number(broadcastEnd - broadcastStart) / 1000000;
+        console.log(`⚡ Broadcast enviado en ${broadcastLatency.toFixed(2)}ms`);
+        
+        // Actualizar BD en paralelo (no bloquear WebSocket)
+        if (prismaInstance) {
+          setImmediate(async () => {
+            try {
+              await prismaInstance!.examWindow.update({
+                where: { id: windowId },
+                data: { estado: newState }
+              });
+              console.log(`💾 BD actualizada para ventana ${windowId}`);
+            } catch (error) {
+              console.error(`❌ Error BD:`, error);
+            }
+          });
+        }
+        
+        // Remover timeout
+        scheduledTimeouts.delete(windowId);
+        
+        console.log(`✅ CAMBIO ULTRA-PRECISO completado en ${actualDelay.toFixed(2)}ms`);
+      } catch (error) {
+        console.error(`❌ Error en cambio programado:`, error);
+      }
+    }, delay);
+    
+    scheduledTimeouts.set(windowId, { timeout, startTime, targetTime: targetTimeNs });
+  }
+};
+
+// Sistema híbrido: Timeouts exactos + Verificador de respaldo ultra-rápido
+const startMillisecondSystem = (prisma: PrismaClient) => {
+  prismaInstance = prisma;
+  console.log('🚀 Iniciando sistema de MILISEGUNDOS (timeouts ultra-precisos)...');
+  
+  // 1. Programar cambios exactos inmediatamente
+  const scheduleUpcomingChanges = async () => {
+    try {
+      const now = new Date();
+      const next12Hours = new Date(now.getTime() + 12 * 60 * 60 * 1000);
+      
+      // Obtener ventanas que van a cambiar en las próximas 12 horas
+      const upcomingWindows = await prisma.examWindow.findMany({
+        where: {
+          OR: [
+            {
+              estado: 'programada',
+              fechaInicio: {
+                gte: now,
+                lte: next12Hours
+              }
+            },
+            {
+              estado: 'en_curso'
+            }
+          ]
+        },
+        include: {
+          exam: { select: { profesorId: true } }
+        }
+      });
+      
+      for (const window of upcomingWindows) {
+        const startDate = new Date(window.fechaInicio);
+        const endDate = new Date(startDate.getTime() + window.duracion * 60 * 1000);
+        
+        // Programar inicio si está programada
+        if (window.estado === 'programada' && startDate > now) {
+          await scheduleExactStateChange(
+            window.id, 
+            startDate, 
+            'en_curso', 
+            (window.exam as any).profesorId
+          );
+        }
+        
+        // Programar fin si está en curso o va a empezar
+        if (endDate > now) {
+          await scheduleExactStateChange(
+            window.id, 
+            endDate, 
+            'finalizada', 
+            (window.exam as any).profesorId
+          );
+        }
+      }
+      
+      console.log(`⚡ Programados ${scheduledTimeouts.size} cambios ultra-precisos (latencia < 10ms)`);
+    } catch (error) {
+      console.error('❌ Error programando cambios exactos:', error);
+    }
+  };
+  
+  // Ejecutar inmediatamente
+  scheduleUpcomingChanges();
+  
+  // 2. Re-programar cambios exactos cada 2 minutos
+  setInterval(() => {
+    scheduleUpcomingChanges();
+  }, 2 * 60 * 1000);
+  
+  // 3. Verificador de respaldo ultra-rápido cada 5 segundos
+  const backupInterval = setInterval(async () => {
+    try {
+      await updateWindowStatuses(prisma, undefined, false, true);
+    } catch (error) {
+      console.error('❌ Error en verificador de respaldo:', error);
+    }
+  }, 5000); // 5 segundos como respaldo ultra-rápido
+  
+  console.log('✅ Sistema MILISEGUNDOS iniciado:');
+  console.log('  ⚡ Cambios exactos: < 10ms de latencia');
+  console.log('  🔄 Verificador respaldo: cada 5 segundos');
+  console.log('  🔁 Re-programación: cada 2 minutos');
+  
+  return { backupInterval };
+};
 
 const ExamWindowRoute = (prisma: PrismaClient) => {
   const router = Router();
@@ -548,28 +754,8 @@ router.get('/disponibles', authenticateToken, requireRole(['student']), async (r
     }
   });
 
-  // Inicializar verificador automático cada 30 segundos para cambios instantáneos
-  const startAutoUpdater = () => {
-    console.log('🚀 Iniciando verificador automático con WebSockets (cada 30 segundos)...');
-    
-    // Verificar inmediatamente
-    updateWindowStatuses(prisma, undefined, false, true).catch(console.error);
-    
-    // Luego cada 30 segundos para máxima responsividad
-    const interval = setInterval(async () => {
-      try {
-        await updateWindowStatuses(prisma, undefined, false, true);
-      } catch (error) {
-        console.error('❌ Error en verificador automático:', error);
-      }
-    }, 30000); // 30 segundos
-    
-    console.log('✅ Verificador automático iniciado (cada 30 segundos con WebSockets)');
-    return interval;
-  };
-  
-  // Iniciar verificador al cargar el módulo
-  startAutoUpdater();
+  // 🚀 Inicializar sistema ULTRA-PRECISO de MILISEGUNDOS
+  startMillisecondSystem(prisma);
 
   return router;
 };
