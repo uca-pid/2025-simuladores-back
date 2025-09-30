@@ -201,6 +201,7 @@ router.get('/disponibles', authenticateToken, requireRole(['student']), async (r
           }
         },
         inscripciones: {
+          where: { cancelledAt: null }, // Solo inscripciones activas
           select: { id: true, userId: true }
         }
       },
@@ -214,6 +215,11 @@ router.get('/disponibles', authenticateToken, requireRole(['student']), async (r
       const inscripcionesActivas = window.inscripciones.length;
       const cupoDisponible = window.cupoMaximo - inscripcionesActivas;
       const yaInscrito = window.inscripciones.some(ins => ins.userId === req.user!.userId);
+      
+      console.log(`📊 DEBUG INSCRIPCIONES - Ventana ${window.id} (${window.exam.titulo}):`);
+      console.log(`    👥 Total inscripciones activas: ${inscripcionesActivas}`);
+      console.log(`    🎯 Usuario ${req.user!.userId} inscrito: ${yaInscrito}`);
+      console.log(`    📋 IDs de usuarios inscritos:`, window.inscripciones.map(ins => ins.userId));
       
       return {
         ...window,

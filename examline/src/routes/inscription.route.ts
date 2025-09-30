@@ -174,7 +174,11 @@ const InscriptionRoute = (prisma: PrismaClient) => {
           cancelledAt: null
         },
         include: {
-          examWindow: true
+          examWindow: {
+            include: {
+              exam: { select: { titulo: true } }
+            }
+          }
         }
       });
 
@@ -187,11 +191,21 @@ const InscriptionRoute = (prisma: PrismaClient) => {
         return res.status(400).json({ error: 'No se puede cancelar la inscripción una vez que la ventana comenzó' });
       }
 
+      // 🔍 DEBUG: Antes de cancelar
+      console.log('🚫 CANCELAR INSCRIPCIÓN DEBUG:');
+      console.log('    📋 Inscription ID:', inscriptionId);
+      console.log('    👤 Usuario ID:', userId);
+      console.log('    🪟 Ventana ID:', inscription.examWindow.id);
+      console.log('    📚 Examen:', inscription.examWindow.exam.titulo);
+      console.log('    ⏰ Estado antes:', inscription.cancelledAt ? 'Ya cancelada' : 'Activa');
+
       // Marcar como cancelada
-      await prisma.inscription.update({
+      const cancelledInscription = await prisma.inscription.update({
         where: { id: inscriptionId },
         data: { cancelledAt: new Date() }
       });
+
+      console.log('    ✅ Cancelación exitosa, cancelledAt:', cancelledInscription.cancelledAt);
 
       res.json({ success: true, message: 'Inscripción cancelada correctamente' });
     } catch (error: any) {
