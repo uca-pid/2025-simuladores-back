@@ -209,11 +209,18 @@ router.get('/disponibles', authenticateToken, requireRole(['student']), async (r
       }
     });
 
-    const examWindowsWithInfo = examWindows.map(window => ({
-      ...window,
-      cupoDisponible: window.cupoMaximo - window.inscripciones.length,
-      yaInscrito: window.inscripciones.some(ins => ins.userId === req.user!.userId)
-    }));
+    // 🔍 DEBUG: Calcular cupos disponibles
+    const examWindowsWithInfo = examWindows.map(window => {
+      const inscripcionesActivas = window.inscripciones.length;
+      const cupoDisponible = window.cupoMaximo - inscripcionesActivas;
+      const yaInscrito = window.inscripciones.some(ins => ins.userId === req.user!.userId);
+      
+      return {
+        ...window,
+        cupoDisponible,
+        yaInscrito
+      };
+    });
 
     res.json(examWindowsWithInfo);
   } catch (error: any) {

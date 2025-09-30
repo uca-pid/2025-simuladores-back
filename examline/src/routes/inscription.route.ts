@@ -40,6 +40,7 @@ const InscriptionRoute = (prisma: PrismaClient) => {
 
       // Verificar cupo
       if (examWindow.inscripciones.length >= examWindow.cupoMaximo) {
+        console.log('  ❌ CUPO COMPLETO - Bloqueando inscripción');
         return res.status(400).json({ error: 'No hay cupo disponible en esta ventana' });
       }
 
@@ -95,6 +96,25 @@ const InscriptionRoute = (prisma: PrismaClient) => {
           }
         }
       });
+
+      // 🔍 DEBUG: Inscripción exitosa
+      console.log('  ✅ INSCRIPCIÓN EXITOSA');
+      console.log('    👤 Usuario ID:', userId);
+      console.log('    🪟 Ventana ID:', examWindowId);
+      console.log('    📚 Examen:', inscription.examWindow.exam.titulo);
+      
+      // Verificar cupo actualizado
+      const updatedWindow = await prisma.examWindow.findUnique({
+        where: { id: examWindowId },
+        include: { inscripciones: { where: { cancelledAt: null } } }
+      });
+      
+      if (updatedWindow) {
+        console.log('    📊 Nuevo estado del cupo:');
+        console.log('      Ocupados:', updatedWindow.inscripciones.length);
+        console.log('      Máximo:', updatedWindow.cupoMaximo);
+        console.log('      Disponibles:', updatedWindow.cupoMaximo - updatedWindow.inscripciones.length);
+      }
 
       res.status(201).json(inscription);
     } catch (error: any) {
