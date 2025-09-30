@@ -2,6 +2,29 @@ import { type PrismaClient } from "@prisma/client";
 import { Router } from "express";
 import { authenticateToken, requireRole } from "../middleware/auth.ts";
 
+// Variable global para almacenar la instancia de Socket.IO
+let io: any = null;
+
+// Función para configurar Socket.IO (será llamada desde el main server)
+export const setSocketIO = (socketInstance: any) => {
+  io = socketInstance;
+  console.log('✅ Socket.IO configurado en ExamWindowRoute');
+};
+
+// Función para enviar actualizaciones via WebSocket
+const broadcastStatusUpdate = (profesorId: number, changes: any[]) => {
+  if (io && changes.length > 0) {
+    console.log(`📡 Enviando actualización WebSocket al profesor ${profesorId}:`, changes);
+    io.to(`professor_${profesorId}`).emit('statusUpdate', {
+      type: 'status_change',
+      changes: changes,
+      timestamp: new Date().toISOString()
+    });
+  } else if (changes.length > 0) {
+    console.log('⚠️ Socket.IO no disponible, cambios no enviados via WebSocket');
+  }
+};
+
 function parseLocalDate(dateString: string): Date {
   let fecha: string, hora: string;
 
@@ -29,8 +52,9 @@ function parseFiltroFecha(dateString: string): Date {
 }
 
 // Función auxiliar para actualizar estados automáticamente
-async function updateWindowStatuses(prisma: PrismaClient, profesorId?: number, returnChanges = false) {
+async function updateWindowStatuses(prisma: PrismaClient, profesorId?: number, returnChanges = false, broadcastChanges = false) {
   const now = new Date();
+  console.log(`\n🔍 === VERIFICANDO ESTADOS === ${now.toISOString()} ===`);
   
   // Obtener ventanas según el profesor (si se especifica) o todas
   const whereClause: any = {};
@@ -40,12 +64,13 @@ async function updateWindowStatuses(prisma: PrismaClient, profesorId?: number, r
   
   const examWindows = await prisma.examWindow.findMany({
     where: whereClause,
-    include: returnChanges ? {
-      exam: { select: { id: true, titulo: true } }
-    } : undefined
+    include: {
+      exam: { select: { id: true, titulo: true, profesorId: true } }
+    }
   });
 
   let updatedWindows = [];
+  const changesByProfesor = new Map();
 
   for (const window of examWindows) {
     const startDate = new Date(window.fechaInicio);
@@ -53,15 +78,22 @@ async function updateWindowStatuses(prisma: PrismaClient, profesorId?: number, r
     let newStatus = window.estado;
     let shouldUpdate = false;
 
+    // Debug de fechas
+    console.log(`📋 "${(window as any).exam.titulo}" (ID: ${window.id}):
+      📅 Estado: ${window.estado}
+      ⏰ Ahora: ${now.toISOString()}
+      🎯 Inicio: ${startDate.toISOString()}
+      🏁 Fin: ${endDate.toISOString()}`);
+
     // Lógica de transición automática
     if (now >= startDate && now <= endDate && window.estado !== 'en_curso' && window.estado !== 'finalizada') {
-      // Si está en el horario del examen y no está ya en curso o finalizada
       newStatus = 'en_curso';
       shouldUpdate = true;
+      console.log(`✅ CAMBIO: "${(window as any).exam.titulo}" → ${window.estado} → ${newStatus}`);
     } else if (now > endDate && window.estado !== 'finalizada') {
-      // Si ya pasó el tiempo del examen
       newStatus = 'finalizada';
       shouldUpdate = true;
+      console.log(`✅ CAMBIO: "${(window as any).exam.titulo}" → ${window.estado} → ${newStatus}`);
     }
 
     // Actualizar si hay cambio
@@ -71,18 +103,37 @@ async function updateWindowStatuses(prisma: PrismaClient, profesorId?: number, r
         data: { estado: newStatus }
       });
 
+      const change = {
+        id: window.id,
+        titulo: (window as any).exam.titulo,
+        estadoAnterior: window.estado,
+        estadoNuevo: newStatus,
+        fechaInicio: window.fechaInicio
+      };
+
       if (returnChanges) {
-        updatedWindows.push({
-          id: window.id,
-          titulo: (window as any).exam.titulo,
-          estadoAnterior: window.estado,
-          estadoNuevo: newStatus,
-          fechaInicio: window.fechaInicio
-        });
+        updatedWindows.push(change);
+      }
+
+      // Agrupar cambios por profesor para WebSocket
+      if (broadcastChanges) {
+        const windowProfesorId = (window as any).exam.profesorId;
+        if (!changesByProfesor.has(windowProfesorId)) {
+          changesByProfesor.set(windowProfesorId, []);
+        }
+        changesByProfesor.get(windowProfesorId).push(change);
       }
     }
   }
 
+  // Enviar notificaciones WebSocket si hay cambios
+  if (broadcastChanges && changesByProfesor.size > 0) {
+    changesByProfesor.forEach((changes, profesorId) => {
+      broadcastStatusUpdate(profesorId, changes);
+    });
+  }
+
+  console.log(`🎯 Verificación completa. ${updatedWindows.length} ventanas actualizadas`);
   return updatedWindows;
 }
 
@@ -168,8 +219,8 @@ const ExamWindowRoute = (prisma: PrismaClient) => {
   // Obtener ventanas de examen del profesor
   router.get('/profesor', authenticateToken, requireRole(['professor']), async (req, res) => {
     try {
-      // Primero actualizar estados automáticamente
-      await updateWindowStatuses(prisma, req.user!.userId);
+      // Primero actualizar estados automáticamente y notificar via WebSocket
+      await updateWindowStatuses(prisma, req.user!.userId, false, true);
       
       // Luego obtener las ventanas actualizadas
       const examWindows = await prisma.examWindow.findMany({
@@ -207,8 +258,8 @@ router.get('/disponibles', authenticateToken, requireRole(['student']), async (r
   const { materia, profesor, fecha } = req.query;
 
   try {
-    // Primero actualizar estados automáticamente de todas las ventanas
-    await updateWindowStatuses(prisma);
+    // Primero actualizar estados automáticamente y notificar via WebSocket
+    await updateWindowStatuses(prisma, undefined, false, true);
     
     const whereClause: any = {
       activa: true,
@@ -483,7 +534,7 @@ router.get('/disponibles', authenticateToken, requireRole(['student']), async (r
   // Actualizar estados automáticamente basado en fechas y horarios
   router.patch('/update-statuses', authenticateToken, requireRole(['professor']), async (req, res) => {
     try {
-      const updatedWindows = await updateWindowStatuses(prisma, req.user!.userId, true);
+      const updatedWindows = await updateWindowStatuses(prisma, req.user!.userId, true, true);
 
       res.json({ 
         success: true, 
@@ -496,6 +547,29 @@ router.get('/disponibles', authenticateToken, requireRole(['student']), async (r
       res.status(500).json({ error: 'Error interno del servidor' });
     }
   });
+
+  // Inicializar verificador automático cada 30 segundos para cambios instantáneos
+  const startAutoUpdater = () => {
+    console.log('🚀 Iniciando verificador automático con WebSockets (cada 30 segundos)...');
+    
+    // Verificar inmediatamente
+    updateWindowStatuses(prisma, undefined, false, true).catch(console.error);
+    
+    // Luego cada 30 segundos para máxima responsividad
+    const interval = setInterval(async () => {
+      try {
+        await updateWindowStatuses(prisma, undefined, false, true);
+      } catch (error) {
+        console.error('❌ Error en verificador automático:', error);
+      }
+    }, 30000); // 30 segundos
+    
+    console.log('✅ Verificador automático iniciado (cada 30 segundos con WebSockets)');
+    return interval;
+  };
+  
+  // Iniciar verificador al cargar el módulo
+  startAutoUpdater();
 
   return router;
 };
