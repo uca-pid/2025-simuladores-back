@@ -1,5 +1,5 @@
 import { type PrismaClient } from "@prisma/client";
-import { notifyStatusChange } from './examWindow.route.ts';
+import { notifyStatusChange } from './examWindow.route.js';
 import { Router } from "express";
 import { authenticateToken, requireRole } from "../middleware/auth.ts";
 
@@ -243,6 +243,51 @@ const InscriptionRoute = (prisma: PrismaClient) => {
       });
 
       console.log('    ✅ Cancelación exitosa, cancelledAt:', cancelledInscription.cancelledAt);
+
+      // 🔄 Reabrir inscripciones si había estado "cerrada_inscripciones" y ahora hay cupo
+      try {
+        const windowNow = await prisma.examWindow.findUnique({
+          where: { id: inscription.examWindow.id },
+          include: {
+            exam: { select: { profesorId: true, titulo: true } },
+            inscripciones: { where: { cancelledAt: null } }
+          }
+        });
+
+        if (windowNow) {
+          const ocupados = windowNow.inscripciones.length;
+          const max = windowNow.cupoMaximo;
+          const now = new Date();
+          const start = new Date(windowNow.fechaInicio);
+
+          console.log('    🔍 Post-cancelación: ocupados/max', ocupados, '/', max, 'estado=', windowNow.estado);
+
+          // Solo reabrir si:
+          // - Estado actual es 'cerrada_inscripciones'
+          // - Hay cupo disponible
+          // - Aún no comenzó la ventana
+          if (windowNow.estado === 'cerrada_inscripciones' && ocupados < max && now < start) {
+            const reopened = await prisma.examWindow.update({
+              where: { id: windowNow.id },
+              data: { estado: 'programada' }
+            });
+
+            console.log('    ✅ Reapertura automática: cerrada_inscripciones → programada');
+
+            // Notificar al profesor en tiempo real
+            notifyStatusChange(windowNow.exam.profesorId, [{
+              id: windowNow.id,
+              titulo: windowNow.exam.titulo,
+              estadoAnterior: 'cerrada_inscripciones',
+              estadoNuevo: 'programada',
+              fechaInicio: windowNow.fechaInicio,
+              timestamp: Date.now()
+            }]);
+          }
+        }
+      } catch (e) {
+        console.log('⚠️ No se pudo evaluar reapertura automática:', (e as any)?.message || e);
+      }
 
       res.json({ success: true, message: 'Inscripción cancelada correctamente' });
     } catch (error: any) {
