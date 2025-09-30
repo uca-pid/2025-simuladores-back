@@ -11,6 +11,15 @@ export const setSocketIO = (socketInstance: any) => {
   console.log('✅ Socket.IO configurado en ExamWindowRoute');
 };
 
+// Permitir a otros módulos notificar cambios de estado via WebSocket
+export const notifyStatusChange = (profesorId: number, changes: any[]) => {
+  try {
+    broadcastStatusUpdate(profesorId, changes);
+  } catch (e) {
+    console.log('⚠️ No se pudo emitir notificación de estado:', (e as any)?.message || e);
+  }
+};
+
 // 🚀 Función ULTRA-OPTIMIZADA para broadcast de milisegundos
 const broadcastStatusUpdate = (profesorId: number, changes: any[]) => {
   if (io && changes.length > 0) {

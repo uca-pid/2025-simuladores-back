@@ -1,4 +1,5 @@
 import { type PrismaClient } from "@prisma/client";
+import { notifyStatusChange } from './examWindow.route.ts';
 import { Router } from "express";
 import { authenticateToken, requireRole } from "../middleware/auth.ts";
 
@@ -70,12 +71,33 @@ const InscriptionRoute = (prisma: PrismaClient) => {
             examWindow: {
               include: {
                 exam: {
-                  select: { titulo: true }
-                }
+                  select: { titulo: true, profesorId: true }
+                },
+                inscripciones: { where: { cancelledAt: null } }
               }
             }
           }
         });
+        // Si al reactivar se llenó el cupo, cerrar inscripciones
+        const ocupados = reactivatedInscription.examWindow.inscripciones.length;
+        const max = (reactivatedInscription.examWindow as any).cupoMaximo;
+        if (ocupados >= max && (reactivatedInscription.examWindow as any).estado === 'programada') {
+          const closed = await prisma.examWindow.update({
+            where: { id: reactivatedInscription.examWindowId },
+            data: { estado: 'cerrada_inscripciones' },
+            include: { exam: { select: { profesorId: true, titulo: true } } }
+          });
+
+          // Notificar al profesor
+          notifyStatusChange((closed.exam as any).profesorId, [{
+            id: closed.id,
+            titulo: (closed.exam as any).titulo,
+            estadoAnterior: 'programada',
+            estadoNuevo: 'cerrada_inscripciones',
+            fechaInicio: (closed as any).fechaInicio,
+            timestamp: Date.now()
+          }]);
+        }
 
         return res.status(201).json(reactivatedInscription);
       }
@@ -90,8 +112,9 @@ const InscriptionRoute = (prisma: PrismaClient) => {
           examWindow: {
             include: {
               exam: {
-                select: { titulo: true }
-              }
+                select: { titulo: true, profesorId: true }
+              },
+              inscripciones: { where: { cancelledAt: null } }
             }
           }
         }
@@ -103,17 +126,31 @@ const InscriptionRoute = (prisma: PrismaClient) => {
       console.log('    🪟 Ventana ID:', examWindowId);
       console.log('    📚 Examen:', inscription.examWindow.exam.titulo);
       
-      // Verificar cupo actualizado
-      const updatedWindow = await prisma.examWindow.findUnique({
-        where: { id: examWindowId },
-        include: { inscripciones: { where: { cancelledAt: null } } }
-      });
-      
-      if (updatedWindow) {
-        console.log('    📊 Nuevo estado del cupo:');
-        console.log('      Ocupados:', updatedWindow.inscripciones.length);
-        console.log('      Máximo:', updatedWindow.cupoMaximo);
-        console.log('      Disponibles:', updatedWindow.cupoMaximo - updatedWindow.inscripciones.length);
+      // Verificar cupo actualizado y cerrar automáticamente si se llena
+      const ocupados = inscription.examWindow.inscripciones.length;
+      const max = (inscription.examWindow as any).cupoMaximo;
+      console.log('    📊 Nuevo estado del cupo:');
+      console.log('      Ocupados:', ocupados);
+      console.log('      Máximo:', max);
+      console.log('      Disponibles:', max - ocupados);
+
+      if (ocupados >= max && (inscription.examWindow as any).estado === 'programada') {
+        console.log('  🔒 CUPO COMPLETO - Cerrando inscripciones automáticamente');
+        const closed = await prisma.examWindow.update({
+          where: { id: examWindowId },
+          data: { estado: 'cerrada_inscripciones' },
+          include: { exam: { select: { profesorId: true, titulo: true } } }
+        });
+
+        // Notificar al profesor en tiempo real
+        notifyStatusChange((closed.exam as any).profesorId, [{
+          id: closed.id,
+          titulo: (closed.exam as any).titulo,
+          estadoAnterior: 'programada',
+          estadoNuevo: 'cerrada_inscripciones',
+          fechaInicio: (closed as any).fechaInicio,
+          timestamp: Date.now()
+        }]);
       }
 
       res.status(201).json(inscription);
