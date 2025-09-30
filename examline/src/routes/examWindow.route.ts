@@ -28,6 +28,64 @@ function parseFiltroFecha(dateString: string): Date {
   return new Date(year, month - 1, day, 0, 0, 0, 0);
 }
 
+// Función auxiliar para actualizar estados automáticamente
+async function updateWindowStatuses(prisma: PrismaClient, profesorId?: number, returnChanges = false) {
+  const now = new Date();
+  
+  // Obtener ventanas según el profesor (si se especifica) o todas
+  const whereClause: any = {};
+  if (profesorId) {
+    whereClause.exam = { profesorId: profesorId };
+  }
+  
+  const examWindows = await prisma.examWindow.findMany({
+    where: whereClause,
+    include: returnChanges ? {
+      exam: { select: { id: true, titulo: true } }
+    } : undefined
+  });
+
+  let updatedWindows = [];
+
+  for (const window of examWindows) {
+    const startDate = new Date(window.fechaInicio);
+    const endDate = new Date(startDate.getTime() + (window.duracion * 60 * 1000));
+    let newStatus = window.estado;
+    let shouldUpdate = false;
+
+    // Lógica de transición automática
+    if (now >= startDate && now <= endDate && window.estado !== 'en_curso' && window.estado !== 'finalizada') {
+      // Si está en el horario del examen y no está ya en curso o finalizada
+      newStatus = 'en_curso';
+      shouldUpdate = true;
+    } else if (now > endDate && window.estado !== 'finalizada') {
+      // Si ya pasó el tiempo del examen
+      newStatus = 'finalizada';
+      shouldUpdate = true;
+    }
+
+    // Actualizar si hay cambio
+    if (shouldUpdate) {
+      await prisma.examWindow.update({
+        where: { id: window.id },
+        data: { estado: newStatus }
+      });
+
+      if (returnChanges) {
+        updatedWindows.push({
+          id: window.id,
+          titulo: (window as any).exam.titulo,
+          estadoAnterior: window.estado,
+          estadoNuevo: newStatus,
+          fechaInicio: window.fechaInicio
+        });
+      }
+    }
+  }
+
+  return updatedWindows;
+}
+
 
 
 const ExamWindowRoute = (prisma: PrismaClient) => {
@@ -110,6 +168,10 @@ const ExamWindowRoute = (prisma: PrismaClient) => {
   // Obtener ventanas de examen del profesor
   router.get('/profesor', authenticateToken, requireRole(['professor']), async (req, res) => {
     try {
+      // Primero actualizar estados automáticamente
+      await updateWindowStatuses(prisma, req.user!.userId);
+      
+      // Luego obtener las ventanas actualizadas
       const examWindows = await prisma.examWindow.findMany({
         where: {
           exam: {
@@ -145,6 +207,9 @@ router.get('/disponibles', authenticateToken, requireRole(['student']), async (r
   const { materia, profesor, fecha } = req.query;
 
   try {
+    // Primero actualizar estados automáticamente de todas las ventanas
+    await updateWindowStatuses(prisma);
+    
     const whereClause: any = {
       activa: true,
       estado: 'programada',
@@ -418,55 +483,7 @@ router.get('/disponibles', authenticateToken, requireRole(['student']), async (r
   // Actualizar estados automáticamente basado en fechas y horarios
   router.patch('/update-statuses', authenticateToken, requireRole(['professor']), async (req, res) => {
     try {
-      const now = new Date();
-      
-      // Obtener todas las ventanas del profesor
-      const examWindows = await prisma.examWindow.findMany({
-        where: {
-          exam: {
-            profesorId: req.user!.userId
-          }
-        }
-      });
-
-      let updatedWindows = [];
-      
-      for (const window of examWindows) {
-        const startDate = new Date(window.fechaInicio);
-        const endDate = new Date(startDate.getTime() + (window.duracion * 60 * 1000));
-        let newStatus = window.estado;
-        let shouldUpdate = false;
-
-        // Lógica de transición automática
-        if (now >= startDate && now <= endDate && window.estado !== 'en_curso' && window.estado !== 'finalizada') {
-          // Si está en el horario del examen y no está ya en curso o finalizada
-          newStatus = 'en_curso';
-          shouldUpdate = true;
-        } else if (now > endDate && window.estado !== 'finalizada') {
-          // Si ya pasó el tiempo del examen
-          newStatus = 'finalizada';
-          shouldUpdate = true;
-        }
-
-        // Actualizar si hay cambio
-        if (shouldUpdate) {
-          const updatedWindow = await prisma.examWindow.update({
-            where: { id: window.id },
-            data: { estado: newStatus },
-            include: {
-              exam: { select: { id: true, titulo: true } }
-            }
-          });
-          
-          updatedWindows.push({
-            id: window.id,
-            titulo: updatedWindow.exam.titulo,
-            estadoAnterior: window.estado,
-            estadoNuevo: newStatus,
-            fechaInicio: window.fechaInicio
-          });
-        }
-      }
+      const updatedWindows = await updateWindowStatuses(prisma, req.user!.userId, true);
 
       res.json({ 
         success: true, 
