@@ -11,13 +11,15 @@ datasource db {
 }
 
 model User {
-  id          Int           @id @default(autoincrement())
-  nombre      String
-  email       String        @unique
-  rol         String        @default("student")
-  password    String
-  exams       Exam[]        // relación inversa: un usuario puede crear muchos exámenes
-  examHistory ExamHistory[] // 🔹 historial de exámenes visualizados
+  id            Int           @id @default(autoincrement())
+  nombre        String
+  email         String        @unique
+  rol           String        @default("student")
+  password      String
+  exams         Exam[]        // relación inversa: un usuario puede crear muchos exámenes
+  examHistory   ExamHistory[] // 🔹 historial de exámenes visualizados
+  inscripciones Inscription[] // inscripciones a ventanas de examen
+  intentos      ExamAttempt[] // intentos de examen
 }
 
 model Exam {
@@ -27,6 +29,8 @@ model Exam {
   profesorId Int
   preguntas  Pregunta[]
   history    ExamHistory[] // 🔹 historial de exámenes visualizados
+  ventanas   ExamWindow[]  // ventanas de examen
+  intentos   ExamAttempt[] // intentos de examen
 }
 
 model Pregunta {
@@ -48,4 +52,53 @@ model ExamHistory {
 
   @@unique([userId, examId]) // opcional: solo una entrada por examen
 }
+
+model ExamWindow {
+  id            Int           @id @default(autoincrement())
+  exam          Exam          @relation(fields: [examId], references: [id])
+  examId        Int
+  fechaInicio   DateTime      // fecha y hora de inicio
+  duracion      Int           // duración en minutos
+  modalidad     String        // "remoto" o "presencial"
+  cupoMaximo    Int
+  notas         String?       // instrucciones adicionales
+  estado        String        @default("programada") // programada, cerrada_inscripciones, en_curso, finalizada
+  activa        Boolean       @default(true) // toggle rápido del profesor
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  
+  inscripciones Inscription[]
+  intentos      ExamAttempt[]
+}
+
+model Inscription {
+  id            Int        @id @default(autoincrement())
+  user          User       @relation(fields: [userId], references: [id])
+  userId        Int
+  examWindow    ExamWindow @relation(fields: [examWindowId], references: [id])
+  examWindowId  Int
+  inscribedAt   DateTime   @default(now())
+  cancelledAt   DateTime?  // si se cancela la inscripción
+  presente      Boolean?   // marcado por el profesor al iniciar la ventana
+  
+  @@unique([userId, examWindowId]) // un usuario solo puede inscribirse una vez por ventana
+}
+
+model ExamAttempt {
+  id            Int         @id @default(autoincrement())
+  user          User        @relation(fields: [userId], references: [id])
+  userId        Int
+  exam          Exam        @relation(fields: [examId], references: [id])
+  examId        Int
+  examWindow    ExamWindow? @relation(fields: [examWindowId], references: [id])
+  examWindowId  Int?        // opcional: puede ser null para exámenes manuales
+  startedAt     DateTime    @default(now())
+  finishedAt    DateTime?
+  respuestas    Json        // respuestas del estudiante
+  puntaje       Float?      // puntaje obtenido
+  estado        String      @default("en_progreso") // en_progreso, finalizado, abandonado
+  
+  @@unique([userId, examId, examWindowId]) // un intento por ventana o por examen manual
+}
+
 
