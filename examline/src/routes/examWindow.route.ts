@@ -478,7 +478,9 @@ router.get('/disponibles', authenticateToken, requireRole(['student']), async (r
     
     const whereClause: any = {
       activa: true,
-      estado: 'programada',
+      estado: {
+        in: ['programada', 'cerrada_inscripciones'] // Incluir ventanas programadas Y sin cupo
+      },
       fechaInicio: {
         gt: new Date() // solo ventanas futuras
       }
