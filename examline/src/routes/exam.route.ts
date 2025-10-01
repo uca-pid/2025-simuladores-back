@@ -71,13 +71,78 @@ const ExamRoute = (prisma: PrismaClient) => {
       }
     });
 
-  // GET /exams/:examId → trae examen y registra historial automáticamente para estudiantes
+  // GET /exams/:examId → trae examen con validación de inscripción para estudiantes
   router.get("/:examId", authenticateToken, async (req, res) => {
     const examId = parseInt(req.params.examId);
+    const windowId = req.query.windowId ? parseInt(req.query.windowId as string) : null;
 
     if (isNaN(examId)) return res.status(400).json({ error: "examId inválido" });
 
     try {
+      // 🔒 VALIDACIÓN DE SEGURIDAD PARA ESTUDIANTES
+      if (req.user!.rol === 'student') {
+        // Requiere windowId para estudiantes
+        if (!windowId) {
+          return res.status(400).json({ 
+            error: "Se requiere windowId para acceder al examen",
+            code: "WINDOW_ID_REQUIRED" 
+          });
+        }
+
+        // Verificar inscripción y permisos
+        const inscription = await prisma.inscription.findFirst({
+          where: {
+            userId: req.user!.userId,
+            examWindowId: windowId
+          },
+          include: {
+            examWindow: {
+              include: {
+                exam: true
+              }
+            }
+          }
+        });
+
+        if (!inscription) {
+          return res.status(403).json({ 
+            error: "No estás inscrito en esta ventana de examen",
+            code: "NOT_ENROLLED" 
+          });
+        }
+
+        // Verificar que el examen de la ventana coincida con el solicitado
+        if (inscription.examWindow.exam.id !== examId) {
+          return res.status(403).json({ 
+            error: "La ventana no corresponde a este examen",
+            code: "EXAM_MISMATCH" 
+          });
+        }
+
+        // Verificar que esté habilitado
+        if (!inscription.presente) {
+          return res.status(403).json({ 
+            error: "No estás habilitado para rendir este examen",
+            code: "NOT_ENABLED" 
+          });
+        }
+
+        // Verificar estado y tiempo de la ventana
+        const now = new Date();
+        const startDate = new Date(inscription.examWindow.fechaInicio);
+        const endDate = new Date(startDate.getTime() + (inscription.examWindow.duracion * 60 * 1000));
+
+        if (inscription.examWindow.estado !== 'en_curso' || now < startDate || now > endDate) {
+          return res.status(403).json({ 
+            error: "El examen no está disponible en este momento",
+            code: "EXAM_NOT_AVAILABLE",
+            estado: inscription.examWindow.estado,
+            fechaInicio: inscription.examWindow.fechaInicio,
+            fechaFin: endDate
+          });
+        }
+      }
+
       const exam = await prisma.exam.findUnique({
         where: { id: examId },
         include: { preguntas: true },
