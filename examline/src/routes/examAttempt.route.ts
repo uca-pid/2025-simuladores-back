@@ -146,6 +146,47 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
     }
   });
 
+  // GET /exam-attempts/:attemptId/results - Ver resultados con respuestas correctas (solo intentos finalizados)
+  router.get("/:attemptId/results", authenticateToken, requireRole(['student']), async (req, res) => {
+    const attemptId = parseInt(req.params.attemptId);
+    const userId = req.user!.userId;
+
+    if (isNaN(attemptId)) {
+      return res.status(400).json({ error: "ID de intento inválido" });
+    }
+
+    try {
+      const attempt = await prisma.examAttempt.findUnique({
+        where: { id: attemptId },
+        include: {
+          exam: {
+            include: { preguntas: true }
+          },
+          examWindow: true
+        }
+      });
+
+      if (!attempt) {
+        return res.status(404).json({ error: "Intento no encontrado" });
+      }
+
+      // Solo el propietario del intento puede verlo
+      if (attempt.userId !== userId) {
+        return res.status(403).json({ error: "No autorizado para ver este intento" });
+      }
+
+      // Solo intentos finalizados pueden mostrar resultados
+      if (attempt.estado !== "finalizado") {
+        return res.status(403).json({ error: "El intento debe estar finalizado para ver resultados" });
+      }
+
+      res.json(attempt);
+    } catch (error) {
+      console.error('Error fetching attempt results:', error);
+      res.status(500).json({ error: "Error obteniendo resultados del intento" });
+    }
+  });
+
   return router;
 };
 
