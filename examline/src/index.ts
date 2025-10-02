@@ -1,9 +1,18 @@
 import 'dotenv/config'; // Load environment variables first
+
+// Configurar zona horaria del servidor para Argentina
+process.env.TZ = 'America/Argentina/Buenos_Aires';
+
 import { PrismaClient } from '@prisma/client';
 import express, { NextFunction, Request, Response } from 'express';
 import cors from 'cors'; // Importar CORS
 import { createServer } from 'http';
 import addRoutes from './routes'; // Asegúrate de que esta ruta sea correcta
+
+// Verificar que la zona horaria se configuró correctamente
+console.log('🌍 Zona horaria del servidor:', process.env.TZ);
+console.log('📅 Fecha actual del servidor:', new Date().toLocaleString('es-AR'));
+console.log('⏰ Fecha UTC:', new Date().toISOString());
 
 const prisma = new PrismaClient();
 const app = express();
