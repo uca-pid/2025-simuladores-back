@@ -34,50 +34,115 @@ const ExamRoute = (prisma: PrismaClient) => {
 
   // GET /exams (protected - get exams for authenticated professor, or all exams if system admin)
   router.get("/", authenticateToken, async (req, res) => {
-    try {
-      let profesorId: number;
-      
-      if (req.user!.rol === 'professor') {
-        // Professors can only see their own exams
-        profesorId = req.user!.userId;
-      } else if (req.user!.rol === 'system') {
-        // System users can specify profesorId in query, or get all exams
-        const queryProfesorId = req.query.profesorId;
-        if (queryProfesorId) {
-          profesorId = Number(queryProfesorId);
-          if (isNaN(profesorId)) {
-            return res.status(400).json({ error: "ProfesorId inválido" });
+      try {
+        let profesorId: number;
+        
+        if (req.user!.rol === 'professor') {
+          // Professors can only see their own exams
+          profesorId = req.user!.userId;
+        } else if (req.user!.rol === 'system') {
+          // System users can specify profesorId in query, or get all exams
+          const queryProfesorId = req.query.profesorId;
+          if (queryProfesorId) {
+            profesorId = Number(queryProfesorId);
+            if (isNaN(profesorId)) {
+              return res.status(400).json({ error: "ProfesorId inválido" });
+            }
+          } else {
+            // Get all exams for system users
+            const exams = await prisma.exam.findMany({
+              include: { preguntas: true, profesor: { select: { nombre: true, email: true } } },
+            });
+            return res.json(exams);
           }
         } else {
-          // Get all exams for system users
-          const exams = await prisma.exam.findMany({
-            include: { preguntas: true, profesor: { select: { nombre: true, email: true } } },
-          });
-          return res.json(exams);
+          return res.status(403).json({ error: "No tienes permisos para ver exámenes" });
         }
-      } else {
-        return res.status(403).json({ error: "No tienes permisos para ver exámenes" });
+  
+        const exams = await prisma.exam.findMany({
+          where: { profesorId },
+          include: { preguntas: true },
+        });
+  
+        res.json(exams);
+      } catch (error) {
+        console.error('Error fetching exams:', error);
+        res.status(500).json({ error: "Error al obtener exámenes" });
       }
+    });
 
-      const exams = await prisma.exam.findMany({
-        where: { profesorId },
-        include: { preguntas: true },
-      });
-
-      res.json(exams);
-    } catch (error) {
-      console.error('Error fetching exams:', error);
-      res.status(500).json({ error: "Error al obtener exámenes" });
-    }
-  });
-
-  // GET /exams/:examId → trae examen y registra historial automáticamente para estudiantes
+  // GET /exams/:examId → trae examen con validación de inscripción para estudiantes
   router.get("/:examId", authenticateToken, async (req, res) => {
     const examId = parseInt(req.params.examId);
+    const windowId = req.query.windowId ? parseInt(req.query.windowId as string) : null;
 
     if (isNaN(examId)) return res.status(400).json({ error: "examId inválido" });
 
     try {
+      // 🔒 VALIDACIÓN DE SEGURIDAD PARA ESTUDIANTES
+      if (req.user!.rol === 'student') {
+        // Requiere windowId para estudiantes
+        if (!windowId) {
+          return res.status(400).json({ 
+            error: "Se requiere windowId para acceder al examen",
+            code: "WINDOW_ID_REQUIRED" 
+          });
+        }
+
+        // Verificar inscripción y permisos
+        const inscription = await prisma.inscription.findFirst({
+          where: {
+            userId: req.user!.userId,
+            examWindowId: windowId
+          },
+          include: {
+            examWindow: {
+              include: {
+                exam: true
+              }
+            }
+          }
+        });
+
+        if (!inscription) {
+          return res.status(403).json({ 
+            error: "No estás inscrito en esta ventana de examen",
+            code: "NOT_ENROLLED" 
+          });
+        }
+
+        // Verificar que el examen de la ventana coincida con el solicitado
+        if (inscription.examWindow.exam.id !== examId) {
+          return res.status(403).json({ 
+            error: "La ventana no corresponde a este examen",
+            code: "EXAM_MISMATCH" 
+          });
+        }
+
+        // Verificar que esté habilitado
+        if (!inscription.presente) {
+          return res.status(403).json({ 
+            error: "No estás habilitado para rendir este examen",
+            code: "NOT_ENABLED" 
+          });
+        }
+
+        // Verificar estado y tiempo de la ventana
+        const now = new Date();
+        const startDate = new Date(inscription.examWindow.fechaInicio);
+        const endDate = new Date(startDate.getTime() + (inscription.examWindow.duracion * 60 * 1000));
+
+        if (inscription.examWindow.estado !== 'en_curso' || now < startDate || now > endDate) {
+          return res.status(403).json({ 
+            error: "El examen no está disponible en este momento",
+            code: "EXAM_NOT_AVAILABLE",
+            estado: inscription.examWindow.estado,
+            fechaInicio: inscription.examWindow.fechaInicio,
+            fechaFin: endDate
+          });
+        }
+      }
+
       const exam = await prisma.exam.findUnique({
         where: { id: examId },
         include: { preguntas: true },
