@@ -1,5 +1,5 @@
 import { type PrismaClient } from "@prisma/client";
-import { notifyStatusChange } from './examWindow.route.js';
+import { notifyStatusChange } from './examWindow.route';
 import { Router } from "express";
 import { authenticateToken, requireRole } from "../middleware/auth.ts";
 
@@ -356,7 +356,17 @@ const InscriptionRoute = (prisma: PrismaClient) => {
       });
 
       if (!inscription) {
-        return res.status(404).json({ error: 'Inscripción no encontrada o no tienes permisos' });
+        // Verificar si la inscripción existe primero
+        const existsInscription = await prisma.inscription.findUnique({
+          where: { id: inscriptionId }
+        });
+
+        if (!existsInscription) {
+          return res.status(404).json({ error: 'Inscripción no encontrada' });
+        } else {
+          // La inscripción existe pero el profesor no tiene permisos
+          return res.status(403).json({ error: 'No tienes permisos para esta inscripción' });
+        }
       }
 
       const updatedInscription = await prisma.inscription.update({
