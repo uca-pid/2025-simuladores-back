@@ -20,14 +20,19 @@ model User {
 }
 
 model Exam {
-  id         Int           @id @default(autoincrement())
-  titulo     String
-  profesorId Int
-  profesor   User          @relation(fields: [profesorId], references: [id])
-  intentos   ExamAttempt[]
-  history    ExamHistory[]
-  ventanas   ExamWindow[]
-  preguntas  Pregunta[]
+  id                    Int           @id @default(autoincrement())
+  titulo                String
+  profesorId            Int
+  tipo                  String        @default("multiple_choice") // "multiple_choice" | "programming"
+  lenguajeProgramacion  String?       // "python" | "javascript" (solo para exámenes de programación)
+  intellisenseHabilitado Boolean      @default(false) // solo para exámenes de programación
+  enunciadoProgramacion String?       // enunciado específico para exámenes de programación
+  codigoInicial         String?       // código inicial/template para exámenes de programación
+  profesor              User          @relation(fields: [profesorId], references: [id])
+  intentos              ExamAttempt[]
+  history               ExamHistory[]
+  ventanas              ExamWindow[]
+  preguntas             Pregunta[]
 }
 
 model Pregunta {
@@ -89,6 +94,7 @@ model ExamAttempt {
   startedAt    DateTime    @default(now())
   finishedAt   DateTime?
   respuestas   Json
+  codigoProgramacion String? // código del estudiante para exámenes de programación
   puntaje      Float?
   estado       String      @default("en_progreso")
   examWindow   ExamWindow? @relation(fields: [examWindowId], references: [id])
