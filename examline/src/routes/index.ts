@@ -5,6 +5,8 @@ import ExamRoute from "./exam.route"
 import ExamWindowRoute from "./examWindow.route"
 import InscriptionRoute from "./inscription.route"
 import ExamAttemptRoute from "./examAttempt.route"
+import ExamStartRoute from "./seb.route"
+
 
 const addRoutes = (app: Express, prisma: PrismaClient) => {
     app.get('/', (req, res) => {
@@ -18,6 +20,7 @@ const addRoutes = (app: Express, prisma: PrismaClient) => {
     app.use('/exam-windows', ExamWindowRoute(prisma))
     app.use('/inscriptions', InscriptionRoute(prisma))
     app.use('/exam-attempts', ExamAttemptRoute(prisma))
+    app.use("/exam-start", ExamStartRoute(prisma))
 
 }
 
