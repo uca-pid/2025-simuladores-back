@@ -17,6 +17,7 @@ model User {
   intentos      ExamAttempt[]
   examHistory   ExamHistory[]
   inscripciones Inscription[]
+  examFiles     ExamFile[]
 }
 
 model Exam {
@@ -33,6 +34,7 @@ model Exam {
   history               ExamHistory[]
   ventanas              ExamWindow[]
   preguntas             Pregunta[]
+  examFiles             ExamFile[]
 }
 
 model Pregunta {
@@ -102,4 +104,18 @@ model ExamAttempt {
   user         User        @relation(fields: [userId], references: [id])
 
   @@unique([userId, examId, examWindowId])
+}
+
+model ExamFile {
+  id        Int      @id @default(autoincrement())
+  examId    Int
+  userId    Int
+  filename  String
+  content   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  exam      Exam     @relation(fields: [examId], references: [id])
+  user      User     @relation(fields: [userId], references: [id])
+
+  @@unique([examId, userId, filename])
 }
