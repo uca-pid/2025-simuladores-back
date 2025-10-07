@@ -135,19 +135,31 @@ const ExamRoute = (prisma: PrismaClient) => {
           });
         }
 
-        // Verificar estado y tiempo de la ventana
-        const now = new Date();
-        const startDate = new Date(inscription.examWindow.fechaInicio);
-        const endDate = new Date(startDate.getTime() + (inscription.examWindow.duracion * 60 * 1000));
+        // Verificar disponibilidad del examen
+        if (inscription.examWindow.sinTiempo) {
+          // Para ventanas sin tiempo, solo verificar que esté en estado programada y activa
+          if (inscription.examWindow.estado !== 'programada') {
+            return res.status(403).json({ 
+              error: "El examen no está disponible en este momento",
+              code: "EXAM_NOT_AVAILABLE",
+              estado: inscription.examWindow.estado
+            });
+          }
+        } else {
+          // Para ventanas con tiempo, verificar estado y tiempo
+          const now = new Date();
+          const startDate = new Date(inscription.examWindow.fechaInicio!);
+          const endDate = new Date(startDate.getTime() + (inscription.examWindow.duracion! * 60 * 1000));
 
-        if (inscription.examWindow.estado !== 'en_curso' || now < startDate || now > endDate) {
-          return res.status(403).json({ 
-            error: "El examen no está disponible en este momento",
-            code: "EXAM_NOT_AVAILABLE",
-            estado: inscription.examWindow.estado,
-            fechaInicio: inscription.examWindow.fechaInicio,
-            fechaFin: endDate
-          });
+          if (inscription.examWindow.estado !== 'en_curso' || now < startDate || now > endDate) {
+            return res.status(403).json({ 
+              error: "El examen no está disponible en este momento",
+              code: "EXAM_NOT_AVAILABLE",
+              estado: inscription.examWindow.estado,
+              fechaInicio: inscription.examWindow.fechaInicio,
+              fechaFin: endDate
+            });
+          }
         }
       }
 

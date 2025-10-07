@@ -37,13 +37,21 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
           return res.status(403).json({ error: "Esta ventana de examen ha sido desactivada por el profesor" });
         }
 
-        // Verificar tiempo y estado de la ventana
-        const now = new Date();
-        const startDate = new Date(inscription.examWindow.fechaInicio);
-        const endDate = new Date(startDate.getTime() + (inscription.examWindow.duracion * 60 * 1000));
+        // Verificar disponibilidad del examen
+        if (inscription.examWindow.sinTiempo) {
+          // Para ventanas sin tiempo, solo verificar que esté activa
+          if (inscription.examWindow.estado !== 'programada') {
+            return res.status(403).json({ error: "El examen no está disponible" });
+          }
+        } else {
+          // Para ventanas con tiempo, verificar tiempo y estado
+          const now = new Date();
+          const startDate = new Date(inscription.examWindow.fechaInicio!);
+          const endDate = new Date(startDate.getTime() + (inscription.examWindow.duracion! * 60 * 1000));
 
-        if (inscription.examWindow.estado !== 'en_curso' || now < startDate || now > endDate) {
-          return res.status(403).json({ error: "El examen no está disponible" });
+          if (inscription.examWindow.estado !== 'en_curso' || now < startDate || now > endDate) {
+            return res.status(403).json({ error: "El examen no está disponible" });
+          }
         }
       }
 

@@ -53,13 +53,14 @@ model ExamHistory {
 model ExamWindow {
   id            Int           @id @default(autoincrement())
   examId        Int
-  fechaInicio   DateTime
-  duracion      Int
+  fechaInicio   DateTime?
+  duracion      Int?
   modalidad     String
   cupoMaximo    Int
   notas         String?
   estado        String        @default("programada")
   activa        Boolean       @default(true)
+  sinTiempo     Boolean       @default(false)
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
   intentos      ExamAttempt[]
