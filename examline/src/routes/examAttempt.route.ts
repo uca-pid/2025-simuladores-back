@@ -32,6 +32,11 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
           return res.status(403).json({ error: "No estás habilitado para este examen" });
         }
 
+        // Verificar que la ventana esté activa
+        if (!inscription.examWindow.activa) {
+          return res.status(403).json({ error: "Esta ventana de examen ha sido desactivada por el profesor" });
+        }
+
         // Verificar tiempo y estado de la ventana
         const now = new Date();
         const startDate = new Date(inscription.examWindow.fechaInicio);

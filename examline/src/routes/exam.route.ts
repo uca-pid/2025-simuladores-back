@@ -127,6 +127,14 @@ const ExamRoute = (prisma: PrismaClient) => {
           });
         }
 
+        // Verificar que la ventana esté activa
+        if (!inscription.examWindow.activa) {
+          return res.status(403).json({ 
+            error: "Esta ventana de examen ha sido desactivada por el profesor",
+            code: "WINDOW_DEACTIVATED"
+          });
+        }
+
         // Verificar estado y tiempo de la ventana
         const now = new Date();
         const startDate = new Date(inscription.examWindow.fechaInicio);

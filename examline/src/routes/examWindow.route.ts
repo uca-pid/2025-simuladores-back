@@ -765,6 +765,86 @@ router.get('/disponibles', authenticateToken, requireRole(['student']), async (r
     }
   });
 
+  // Activar/desactivar ventana de examen
+  router.patch('/:id/toggle-active', authenticateToken, requireRole(['professor']), async (req, res) => {
+    try {
+      const windowId = parseInt(req.params.id);
+      const profesorId = req.user!.userId;
+
+      // Verificar que la ventana pertenezca al profesor
+      const existingWindow = await prisma.examWindow.findFirst({
+        where: {
+          id: windowId,
+          exam: { profesorId: profesorId }
+        },
+        include: {
+          exam: { select: { titulo: true } }
+        }
+      });
+
+      if (!existingWindow) {
+        return res.status(404).json({ error: 'Ventana de examen no encontrada' });
+      }
+
+      // No permitir desactivar ventanas en curso o finalizadas
+      if (existingWindow.estado === 'en_curso') {
+        return res.status(400).json({ 
+          error: 'No se puede desactivar una ventana que está en curso' 
+        });
+      }
+
+      if (existingWindow.estado === 'finalizada') {
+        return res.status(400).json({ 
+          error: 'No se puede modificar una ventana finalizada' 
+        });
+      }
+
+      // Cambiar el estado activo
+      const updatedWindow = await prisma.examWindow.update({
+        where: { id: windowId },
+        data: { activa: !existingWindow.activa },
+        include: {
+          exam: { select: { titulo: true } },
+          inscripciones: {
+            where: { cancelledAt: null },
+            select: { id: true }
+          }
+        }
+      });
+
+      // Broadcast del cambio via WebSocket para actualización en tiempo real
+      if (io) {
+        const statusPayload = {
+          t: 'toggle', // type: toggle
+          i: windowId, // id
+          a: updatedWindow.activa, // activa
+          ts: Date.now()
+        };
+        
+        io.to(`professor_${profesorId}`).emit('window_toggle', statusPayload);
+        console.log(`📡 Toggle broadcast → profesor ${profesorId}, ventana ${windowId} → ${updatedWindow.activa ? 'activada' : 'desactivada'}`);
+      }
+
+      const action = updatedWindow.activa ? 'activada' : 'desactivada';
+      console.log(`🔄 Ventana ${windowId} (${existingWindow.exam.titulo}) ${action} por profesor ${profesorId}`);
+
+      res.json({
+        success: true,
+        message: `Ventana ${action} correctamente`,
+        window: {
+          id: updatedWindow.id,
+          activa: updatedWindow.activa,
+          estado: updatedWindow.estado,
+          examTitulo: updatedWindow.exam.titulo
+        }
+      });
+
+    } catch (error: any) {
+      console.error('Error cambiando estado activo de ventana:', error);
+      res.status(500).json({ error: 'Error interno del servidor' });
+    }
+  });
+
   // 🚀 Inicializar sistema ULTRA-PRECISO de MILISEGUNDOS
   startMillisecondSystem(prisma);
 
