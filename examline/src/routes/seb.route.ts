@@ -34,21 +34,51 @@ const ExamStartRoute = (prisma: PrismaClient) => {
 <plist version="1.0">
   <dict>
     <key>startMode</key>
-    <string>browser</string>
+    <integer>0</integer>
     <key>startURL</key>
     <string>${frontUrl}</string>
+    <key>hashedQuitPassword</key>
+    <string>${hashedQuitPassword}</string>
+    <key>hashedAdminPassword</key>
+    <string>${hashedSettingsPassword}</string>
     <key>allowQuit</key>
     <true/>
-    <key>fullScreen</key>
-    <false/>
+    
+    <!-- Configuración de displays -->
+    <key>allowedDisplaysMaxNumber</key>
+    <integer>5</integer>
+    <key>allowedDisplayBuiltin</key>
+    <true/>
+    
+    <!-- Modo kiosko -->
     <key>kioskMode</key>
-    <false/>
-    <key>urlFilterEnable</key>
-    <false/>
+    <integer>0</integer>
+    
+    <!-- Pantalla completa -->
+    <key>touchOptimized</key>
+    <integer>0</integer>
+    <key>browserWindowAllowReload</key>
+    <true/>
+    <key>showTaskBar</key>
+    <true/>
+    
+    <!-- Permitir Alt+Tab -->
     <key>allowSwitchToApplications</key>
     <true/>
-    <key>allowMultipleInstances</key>
+    <key>enableAltEsc</key>
     <true/>
+    <key>enableAltTab</key>
+    <true/>
+    <key>enableEsc</key>
+    <true/>
+    
+    <!-- Filtros -->
+    <key>urlFilterEnable</key>
+    <false/>
+    
+    <!-- Otros -->
+    <key>allowSpellCheck</key>
+    <false/>
   </dict>
 </plist>`
 
