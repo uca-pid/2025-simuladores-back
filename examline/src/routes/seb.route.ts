@@ -47,6 +47,8 @@ const ExamStartRoute = (prisma: PrismaClient) => {
     <false/>
     <key>allowSwitchToApplications</key>
     <true/>
+    <key>allowMultipleInstances</key>
+    <true/>
   </dict>
 </plist>`
 
