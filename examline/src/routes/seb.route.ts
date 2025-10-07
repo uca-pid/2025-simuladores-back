@@ -25,62 +25,43 @@ const ExamStartRoute = (prisma: PrismaClient) => {
     const hashedQuitPassword = hashSHA256(contra)
     const hashedSettingsPassword = hashSHA256(contra)
 
-    // URL del frontend que SEB abrirá
-    const frontUrl = `http://localhost:3000/exam-attempt/${examId}?windowId=${windowId}?token=${token}`
+   const frontUrl = `http://localhost:3000/exam-attempt/${examId}?windowId=${windowId}&token=${token}`;
+const escapedFrontUrl = frontUrl.replace(/&/g, '&amp;');
 
-    const sebPlist = `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
- "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+const sebPlist = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
-  <dict>
-    <key>startMode</key>
-    <integer>0</integer>
-    <key>startURL</key>
-    <string>${frontUrl}</string>
-    <key>hashedQuitPassword</key>
-    <string>${hashedQuitPassword}</string>
-    <key>hashedAdminPassword</key>
-    <string>${hashedSettingsPassword}</string>
-    <key>allowQuit</key>
-    <true/>
-    
-    <!-- Configuración de displays -->
-    <key>allowedDisplaysMaxNumber</key>
-    <integer>5</integer>
-    <key>allowedDisplayBuiltin</key>
-    <true/>
-    
-    <!-- Modo kiosko -->
-    <key>kioskMode</key>
-    <integer>0</integer>
-    
-    <!-- Pantalla completa -->
-    <key>touchOptimized</key>
-    <integer>0</integer>
-    <key>browserWindowAllowReload</key>
-    <true/>
-    <key>showTaskBar</key>
-    <true/>
-    
-    <!-- Permitir Alt+Tab -->
-    <key>allowSwitchToApplications</key>
-    <true/>
-    <key>enableAltEsc</key>
-    <true/>
-    <key>enableAltTab</key>
-    <true/>
-    <key>enableEsc</key>
-    <true/>
-    
-    <!-- Filtros -->
-    <key>urlFilterEnable</key>
-    <false/>
-    
-    <!-- Otros -->
-    <key>allowSpellCheck</key>
-    <false/>
-  </dict>
-</plist>`
+<dict>
+  <key>startURL</key>
+  <string>${escapedFrontUrl}</string>
+  <key>allowQuit</key>
+  <integer>2</integer>
+  <key>quitURLConfirm</key>
+  <false/>
+  <key>hashedAdminPassword</key>
+  <string>${hashedSettingsPassword}</string>
+  <key>allowedDisplaysMaxNumber</key>
+  <integer>5</integer>
+  <key>allowedDisplayBuiltin</key>
+  <true/>
+  <key>browserWindowAllowReload</key>
+  <true/>
+  <key>showTaskBar</key>
+  <true/>
+  <key>allowSwitchToApplications</key>
+  <true/>
+  <key>enableAltEsc</key>
+  <true/>
+  <key>enableAltTab</key>
+  <true/>
+  <key>enableEsc</key>
+  <true/>
+  <key>urlFilterEnable</key>
+  <false/>
+</dict>
+</plist>`;
+
+
 
     // Forzar descarga del .seb
     res.setHeader("Content-Disposition", `attachment; filename=examen_${examId}.seb`)
