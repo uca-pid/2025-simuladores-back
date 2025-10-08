@@ -8,7 +8,6 @@ let io: any = null;
 // Función para configurar Socket.IO (será llamada desde el main server)
 export const setSocketIO = (socketInstance: any) => {
   io = socketInstance;
-  console.log('✅ Socket.IO configurado en ExamWindowRoute');
 };
 
 // Permitir a otros módulos notificar cambios de estado via WebSocket
@@ -36,15 +35,12 @@ const broadcastStatusUpdate = (profesorId: number, changes: any[]) => {
       ts: Date.now() // timestamp del broadcast
     };
     
-    console.log(`📡 BROADCAST ULTRA-RÁPIDO → profesor ${profesorId}`);
-    
     // Envío inmediato sin compresión ni validaciones adicionales
     io.to(`professor_${profesorId}`).emit('su', optimizedPayload); // 'su' = statusUpdate (abreviado)
     
     const broadcastEndTime = process.hrtime.bigint();
     const broadcastLatency = Number(broadcastEndTime - broadcastStartTime) / 1000000;
     
-    console.log(`⚡ Broadcast completado en ${broadcastLatency.toFixed(3)}ms`);
   } else if (changes.length > 0) {
     console.log('⚠️ Socket.IO no disponible, cambios no enviados via WebSocket');
   }
@@ -79,7 +75,6 @@ function parseFiltroFecha(dateString: string): Date {
 // Función auxiliar para actualizar estados automáticamente
 async function updateWindowStatuses(prisma: PrismaClient, profesorId?: number, returnChanges = false, broadcastChanges = false) {
   const now = new Date();
-  console.log(`\n🔍 === VERIFICANDO ESTADOS === ${now.toISOString()} ===`);
   
   // Obtener ventanas según el profesor (si se especifica) o todas
   const whereClause: any = {};
@@ -114,13 +109,6 @@ async function updateWindowStatuses(prisma: PrismaClient, profesorId?: number, r
     const endDate = new Date(startDate.getTime() + (window.duracion! * 60 * 1000));
     let newStatus = window.estado;
     let shouldUpdate = false;
-
-    // Debug de fechas
-    console.log(`📋 "${(window as any).exam.titulo}" (ID: ${window.id}):
-      📅 Estado: ${window.estado}
-      ⏰ Ahora: ${now.toISOString()}
-      🎯 Inicio: ${startDate.toISOString()}
-      🏁 Fin: ${endDate.toISOString()}`);
 
     // Lógica de transición automática
     if (now >= startDate && now <= endDate && window.estado !== 'en_curso' && window.estado !== 'finalizada') {
@@ -170,7 +158,6 @@ async function updateWindowStatuses(prisma: PrismaClient, profesorId?: number, r
     });
   }
 
-  console.log(`🎯 Verificación completa. ${updatedWindows.length} ventanas actualizadas`);
   return updatedWindows;
 }
 
@@ -226,8 +213,6 @@ const scheduleExactStateChange = async (windowId: number, changeTime: Date, newS
     const startTime = process.hrtime.bigint();
     const targetTimeNs = startTime + BigInt(delay * 1000000);
     
-    console.log(`⏰ PROGRAMANDO cambio ULTRA-PRECISO: Ventana ${windowId} → ${newState} en ${delay}ms`);
-    
     // Programar timeout de alta precisión
     const timeout = preciseSetTimeout(async () => {
       const executionTime = process.hrtime.bigint();
@@ -281,7 +266,6 @@ const scheduleExactStateChange = async (windowId: number, changeTime: Date, newS
 // Sistema híbrido: Timeouts exactos + Verificador de respaldo ultra-rápido
 const startMillisecondSystem = (prisma: PrismaClient) => {
   prismaInstance = prisma;
-  console.log('🚀 Iniciando sistema de MILISEGUNDOS (timeouts ultra-precisos)...');
   
   // 1. Programar cambios exactos inmediatamente
   const scheduleUpcomingChanges = async () => {
@@ -335,7 +319,6 @@ const startMillisecondSystem = (prisma: PrismaClient) => {
         }
       }
       
-      console.log(`⚡ Programados ${scheduledTimeouts.size} cambios ultra-precisos (latencia < 10ms)`);
     } catch (error) {
       console.error('❌ Error programando cambios exactos:', error);
     }
@@ -357,11 +340,6 @@ const startMillisecondSystem = (prisma: PrismaClient) => {
       console.error('❌ Error en verificador de respaldo:', error);
     }
   }, 5000); // 5 segundos como respaldo ultra-rápido
-  
-  console.log('✅ Sistema MILISEGUNDOS iniciado:');
-  console.log('  ⚡ Cambios exactos: < 10ms de latencia');
-  console.log('  🔄 Verificador respaldo: cada 5 segundos');
-  console.log('  🔁 Re-programación: cada 2 minutos');
   
   return { backupInterval };
 };
