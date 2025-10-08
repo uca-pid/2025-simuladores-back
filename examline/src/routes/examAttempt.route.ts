@@ -18,9 +18,7 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
             userId_examWindowId: { userId, examWindowId }
           },
           include: {
-            examWindow: {
-              include: { exam: true }
-            }
+            examWindow: true
           }
         });
 
@@ -28,7 +26,10 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
           return res.status(403).json({ error: "No estás inscrito en esta ventana" });
         }
 
-        if (!inscription.presente) {
+        // Solo verificar presente si la ventana requiere presentismo
+        // Ser defensivo: si requierePresente es null/undefined, asumir false (acceso libre)
+        const requierePresente = inscription.examWindow.requierePresente === true;
+        if (requierePresente && !inscription.presente) {
           return res.status(403).json({ error: "No estás habilitado para este examen" });
         }
 

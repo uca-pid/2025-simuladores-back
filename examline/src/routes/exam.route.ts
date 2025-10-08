@@ -136,11 +136,7 @@ const ExamRoute = (prisma: PrismaClient) => {
             examWindowId: windowId
           },
           include: {
-            examWindow: {
-              include: {
-                exam: true
-              }
-            }
+            examWindow: true
           }
         });
 
@@ -152,15 +148,17 @@ const ExamRoute = (prisma: PrismaClient) => {
         }
 
         // Verificar que el examen de la ventana coincida con el solicitado
-        if (inscription.examWindow.exam.id !== examId) {
+        if (inscription.examWindow.examId !== examId) {
           return res.status(403).json({ 
             error: "La ventana no corresponde a este examen",
             code: "EXAM_MISMATCH" 
           });
         }
 
-        // Verificar que esté habilitado
-        if (!inscription.presente) {
+        // Solo verificar presente si la ventana requiere presentismo
+        // Ser defensivo: si requierePresente es null/undefined, asumir false (acceso libre)
+        const requierePresente = inscription.examWindow.requierePresente === true;
+        if (requierePresente && !inscription.presente) {
           return res.status(403).json({ 
             error: "No estás habilitado para rendir este examen",
             code: "NOT_ENABLED" 
