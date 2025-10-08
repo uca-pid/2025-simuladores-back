@@ -98,8 +98,20 @@ async function updateWindowStatuses(prisma: PrismaClient, profesorId?: number, r
   const changesByProfesor = new Map();
 
   for (const window of examWindows) {
-    const startDate = new Date(window.fechaInicio);
-    const endDate = new Date(startDate.getTime() + (window.duracion * 60 * 1000));
+    // Saltar ventanas sin tiempo - no tienen transiciones automáticas
+    if (window.sinTiempo) {
+      console.log(`📋 "${(window as any).exam.titulo}" (ID: ${window.id}): SIN TIEMPO - sin cambios automáticos`);
+      continue;
+    }
+
+    // Solo procesar ventanas con tiempo
+    if (!window.fechaInicio || !window.duracion) {
+      console.log(`⚠️ "${(window as any).exam.titulo}" (ID: ${window.id}): Datos de tiempo incompletos`);
+      continue;
+    }
+
+    const startDate = new Date(window.fechaInicio!);
+    const endDate = new Date(startDate.getTime() + (window.duracion! * 60 * 1000));
     let newStatus = window.estado;
     let shouldUpdate = false;
 
@@ -358,12 +370,13 @@ const ExamWindowRoute = (prisma: PrismaClient) => {
   const router = Router();
 
   router.post('/', authenticateToken, requireRole(['professor']), async (req, res) => {
-  const { examId, fechaInicio, duracion, modalidad, cupoMaximo, notas } = req.body;
+  const { examId, fechaInicio, duracion, modalidad, cupoMaximo, notas, sinTiempo, requierePresente } = req.body;
 
   try {
         const examIdNumber = parseInt(examId);
-        const duracionNumber = parseInt(duracion);
+        const duracionNumber = duracion ? parseInt(duracion) : null;
         const cupoMaximoNumber = parseInt(cupoMaximo);
+        const isSinTiempo = Boolean(sinTiempo);
 
         if (isNaN(examIdNumber)) {
           return res
@@ -381,10 +394,26 @@ const ExamWindowRoute = (prisma: PrismaClient) => {
           });
         }
 
-        if (!fechaInicio || !duracionNumber || !modalidad || !cupoMaximoNumber) {
-          return res
-            .status(400)
-            .json({ error: "Faltan campos requeridos" });
+        // Validaciones para ventanas con tiempo
+        if (!isSinTiempo) {
+          if (!fechaInicio || !duracionNumber || !modalidad || !cupoMaximoNumber) {
+            return res
+              .status(400)
+              .json({ error: "Faltan campos requeridos para ventana con tiempo" });
+          }
+
+          if (duracionNumber < 1) {
+            return res
+              .status(400)
+              .json({ error: "La duración debe ser mayor a 0 minutos" });
+          }
+        } else {
+          // Validaciones para ventanas sin tiempo
+          if (!modalidad || !cupoMaximoNumber) {
+            return res
+              .status(400)
+              .json({ error: "Faltan campos requeridos para ventana sin tiempo" });
+          }
         }
 
         if (!["remoto", "presencial"].includes(modalidad)) {
@@ -399,23 +428,26 @@ const ExamWindowRoute = (prisma: PrismaClient) => {
             .json({ error: "El cupo máximo debe ser mayor a 0" });
         }
 
-        if (duracionNumber < 1) {
-          return res
-            .status(400)
-            .json({ error: "La duración debe ser mayor a 0 minutos" });
+        // Preparar datos para la creación
+        const windowData: any = {
+          examId: examIdNumber,
+          modalidad,
+          cupoMaximo: cupoMaximoNumber,
+          notas: notas || null,
+          sinTiempo: isSinTiempo,
+          requierePresente: Boolean(requierePresente),
+          estado: isSinTiempo ? 'programada' : 'programada'
+        };
+
+        // Solo agregar fecha y duración si no es sin tiempo
+        if (!isSinTiempo) {
+          const fechaInicioDate = parseLocalDate(fechaInicio);
+          windowData.fechaInicio = fechaInicioDate;
+          windowData.duracion = duracionNumber;
         }
 
-        const fechaInicioDate = parseLocalDate(fechaInicio);
-
         const examWindow = await prisma.examWindow.create({
-          data: {
-            examId: examIdNumber,
-            fechaInicio: fechaInicioDate,
-            duracion: duracionNumber,
-            modalidad,
-            cupoMaximo: cupoMaximoNumber,
-            notas: notas || null,
-          },
+          data: windowData,
           include: {
             exam: { select: { id: true, titulo: true } },
             inscripciones: true,
@@ -481,9 +513,19 @@ router.get('/disponibles', authenticateToken, requireRole(['student']), async (r
       estado: {
         in: ['programada', 'cerrada_inscripciones'] // Incluir ventanas programadas Y sin cupo
       },
-      fechaInicio: {
-        gt: new Date() // solo ventanas futuras
-      }
+      OR: [
+        // Ventanas con tiempo: solo futuras
+        {
+          sinTiempo: false,
+          fechaInicio: {
+            gt: new Date()
+          }
+        },
+        // Ventanas sin tiempo: siempre disponibles si están activas
+        {
+          sinTiempo: true
+        }
+      ]
     };
 
     // Filtro por materia
@@ -507,19 +549,30 @@ router.get('/disponibles', authenticateToken, requireRole(['student']), async (r
       };
     }
 
-    // Filtro por fecha
+    // Filtro por fecha (solo aplica a ventanas con tiempo)
     if (fecha) {
-  const fechaInicio = parseFiltroFecha(fecha as string);
+      const fechaInicio = parseFiltroFecha(fecha as string);
 
-  const fechaFin = new Date(fechaInicio);
-  fechaFin.setHours(23, 59, 59, 999);
+      const fechaFin = new Date(fechaInicio);
+      fechaFin.setHours(23, 59, 59, 999);
 
-
-  whereClause.fechaInicio = {
-    gte: fechaInicio,
-    lte: fechaFin
-  };
-}
+      // Modificar el OR para incluir filtro de fecha solo en ventanas con tiempo
+      whereClause.OR = [
+        // Ventanas con tiempo: futuras Y que coincidan con fecha filtrada
+        {
+          sinTiempo: false,
+          fechaInicio: {
+            gte: fechaInicio,
+            lte: fechaFin,
+            gt: new Date()
+          }
+        },
+        // Ventanas sin tiempo: siempre disponibles si están activas (sin filtro de fecha)
+        {
+          sinTiempo: true
+        }
+      ];
+    }
 
     const examWindows = await prisma.examWindow.findMany({
       where: whereClause,
@@ -573,7 +626,7 @@ router.get('/disponibles', authenticateToken, requireRole(['student']), async (r
   // Actualizar ventana de examen
   router.put('/:id', authenticateToken, requireRole(['professor']), async (req, res) => {
     const windowId = parseInt(req.params.id);
-    const { fechaInicio, duracion, modalidad, cupoMaximo, notas, activa, estado } = req.body;
+    const { fechaInicio, duracion, modalidad, cupoMaximo, notas, activa, estado, requierePresente } = req.body;
 
     try {
       // Verificar que la ventana existe y pertenece al profesor
@@ -599,6 +652,7 @@ router.get('/disponibles', authenticateToken, requireRole(['student']), async (r
       if (notas !== undefined) updateData.notas = notas;
       if (activa !== undefined) updateData.activa = activa;
       if (estado) updateData.estado = estado;
+      if (requierePresente !== undefined) updateData.requierePresente = Boolean(requierePresente);
 
       const updatedWindow = await prisma.examWindow.update({
         where: { id: windowId },
@@ -653,6 +707,60 @@ router.get('/disponibles', authenticateToken, requireRole(['student']), async (r
       res.json({ success: true, activa: updatedWindow.activa });
     } catch (error: any) {
       console.error('Error en toggle:', error);
+      res.status(500).json({ error: 'Error interno del servidor' });
+    }
+  });
+
+  // Toggle del sistema de presentismo
+  router.patch('/:id/toggle-presentismo', authenticateToken, requireRole(['professor']), async (req, res) => {
+    const windowId = parseInt(req.params.id);
+
+    try {
+      // Verificar que la ventana existe y pertenece al profesor
+      const existingWindow = await prisma.examWindow.findFirst({
+        where: {
+          id: windowId,
+          exam: {
+            profesorId: req.user!.userId
+          }
+        }
+      });
+
+      if (!existingWindow) {
+        return res.status(404).json({ error: 'Ventana no encontrada o no tienes permisos' });
+      }
+
+      // No permitir cambiar presentismo en ventanas ya finalizadas
+      if (existingWindow.estado === 'finalizada') {
+        return res.status(400).json({ 
+          error: 'No se puede modificar el presentismo en una ventana finalizada' 
+        });
+      }
+
+      const updatedWindow = await prisma.examWindow.update({
+        where: { id: windowId },
+        data: {
+          requierePresente: !existingWindow.requierePresente
+        },
+        include: {
+          exam: { select: { titulo: true } }
+        }
+      });
+
+      const action = updatedWindow.requierePresente ? 'activado' : 'desactivado';
+      
+      res.json({ 
+        success: true, 
+        requierePresente: updatedWindow.requierePresente,
+        message: `Sistema de presentismo ${action} correctamente`,
+        window: {
+          id: updatedWindow.id,
+          requierePresente: updatedWindow.requierePresente,
+          examTitulo: updatedWindow.exam.titulo
+        }
+      });
+    } catch (error: any) {
+      console.error('Error en toggle presentismo:', error);
       res.status(500).json({ error: 'Error interno del servidor' });
     }
   });
@@ -761,6 +869,86 @@ router.get('/disponibles', authenticateToken, requireRole(['student']), async (r
       });
     } catch (error: any) {
       console.error('Error actualizando estados:', error);
+      res.status(500).json({ error: 'Error interno del servidor' });
+    }
+  });
+
+  // Activar/desactivar ventana de examen
+  router.patch('/:id/toggle-active', authenticateToken, requireRole(['professor']), async (req, res) => {
+    try {
+      const windowId = parseInt(req.params.id);
+      const profesorId = req.user!.userId;
+
+      // Verificar que la ventana pertenezca al profesor
+      const existingWindow = await prisma.examWindow.findFirst({
+        where: {
+          id: windowId,
+          exam: { profesorId: profesorId }
+        },
+        include: {
+          exam: { select: { titulo: true } }
+        }
+      });
+
+      if (!existingWindow) {
+        return res.status(404).json({ error: 'Ventana de examen no encontrada' });
+      }
+
+      // No permitir desactivar ventanas en curso o finalizadas
+      if (existingWindow.estado === 'en_curso') {
+        return res.status(400).json({ 
+          error: 'No se puede desactivar una ventana que está en curso' 
+        });
+      }
+
+      if (existingWindow.estado === 'finalizada') {
+        return res.status(400).json({ 
+          error: 'No se puede modificar una ventana finalizada' 
+        });
+      }
+
+      // Cambiar el estado activo
+      const updatedWindow = await prisma.examWindow.update({
+        where: { id: windowId },
+        data: { activa: !existingWindow.activa },
+        include: {
+          exam: { select: { titulo: true } },
+          inscripciones: {
+            where: { cancelledAt: null },
+            select: { id: true }
+          }
+        }
+      });
+
+      // Broadcast del cambio via WebSocket para actualización en tiempo real
+      if (io) {
+        const statusPayload = {
+          t: 'toggle', // type: toggle
+          i: windowId, // id
+          a: updatedWindow.activa, // activa
+          ts: Date.now()
+        };
+        
+        io.to(`professor_${profesorId}`).emit('window_toggle', statusPayload);
+        console.log(`📡 Toggle broadcast → profesor ${profesorId}, ventana ${windowId} → ${updatedWindow.activa ? 'activada' : 'desactivada'}`);
+      }
+
+      const action = updatedWindow.activa ? 'activada' : 'desactivada';
+      console.log(`🔄 Ventana ${windowId} (${existingWindow.exam.titulo}) ${action} por profesor ${profesorId}`);
+
+      res.json({
+        success: true,
+        message: `Ventana ${action} correctamente`,
+        window: {
+          id: updatedWindow.id,
+          activa: updatedWindow.activa,
+          estado: updatedWindow.estado,
+          examTitulo: updatedWindow.exam.titulo
+        }
+      });
+
+    } catch (error: any) {
+      console.error('Error cambiando estado activo de ventana:', error);
       res.status(500).json({ error: 'Error interno del servidor' });
     }
   });
