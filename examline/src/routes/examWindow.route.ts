@@ -95,13 +95,11 @@ async function updateWindowStatuses(prisma: PrismaClient, profesorId?: number, r
   for (const window of examWindows) {
     // Saltar ventanas sin tiempo - no tienen transiciones automáticas
     if (window.sinTiempo) {
-      console.log(`📋 "${(window as any).exam.titulo}" (ID: ${window.id}): SIN TIEMPO - sin cambios automáticos`);
       continue;
     }
 
     // Solo procesar ventanas con tiempo
     if (!window.fechaInicio || !window.duracion) {
-      console.log(`⚠️ "${(window as any).exam.titulo}" (ID: ${window.id}): Datos de tiempo incompletos`);
       continue;
     }
 
@@ -350,6 +348,9 @@ const ExamWindowRoute = (prisma: PrismaClient) => {
   router.post('/', authenticateToken, requireRole(['professor']), async (req, res) => {
   const { examId, fechaInicio, duracion, modalidad, cupoMaximo, notas, sinTiempo, requierePresente, usaSEB } = req.body;
 
+  // Debug: verificar qué llega del frontend
+  console.log('📥 Backend recibió usaSEB:', usaSEB, typeof usaSEB);
+
   try {
         const examIdNumber = parseInt(examId);
         const duracionNumber = duracion ? parseInt(duracion) : null;
@@ -414,6 +415,7 @@ const ExamWindowRoute = (prisma: PrismaClient) => {
           notas: notas || null,
           sinTiempo: isSinTiempo,
           requierePresente: Boolean(requierePresente),
+          usaSEB: Boolean(usaSEB),
           estado: isSinTiempo ? 'programada' : 'programada'
         };
 
