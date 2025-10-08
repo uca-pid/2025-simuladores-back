@@ -358,7 +358,7 @@ const ExamWindowRoute = (prisma: PrismaClient) => {
   const router = Router();
 
   router.post('/', authenticateToken, requireRole(['professor']), async (req, res) => {
-  const { examId, fechaInicio, duracion, modalidad, cupoMaximo, notas } = req.body;
+  const { examId, fechaInicio, duracion, modalidad, cupoMaximo, notas, usaSEB } = req.body;
 
   try {
         const examIdNumber = parseInt(examId);
@@ -415,6 +415,7 @@ const ExamWindowRoute = (prisma: PrismaClient) => {
             modalidad,
             cupoMaximo: cupoMaximoNumber,
             notas: notas || null,
+            usaSEB: usaSEB || false,
           },
           include: {
             exam: { select: { id: true, titulo: true } },
@@ -573,7 +574,7 @@ router.get('/disponibles', authenticateToken, requireRole(['student']), async (r
   // Actualizar ventana de examen
   router.put('/:id', authenticateToken, requireRole(['professor']), async (req, res) => {
     const windowId = parseInt(req.params.id);
-    const { fechaInicio, duracion, modalidad, cupoMaximo, notas, activa, estado } = req.body;
+    const { fechaInicio, duracion, modalidad, cupoMaximo, notas, activa, estado, usaSEB } = req.body;
 
     try {
       // Verificar que la ventana existe y pertenece al profesor
@@ -599,6 +600,7 @@ router.get('/disponibles', authenticateToken, requireRole(['student']), async (r
       if (notas !== undefined) updateData.notas = notas;
       if (activa !== undefined) updateData.activa = activa;
       if (estado) updateData.estado = estado;
+      if (usaSEB !== undefined) updateData.usaSEB = Boolean(usaSEB);
 
       const updatedWindow = await prisma.examWindow.update({
         where: { id: windowId },

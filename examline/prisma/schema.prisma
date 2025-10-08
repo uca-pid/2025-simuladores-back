@@ -64,6 +64,7 @@ model ExamWindow {
   notas         String?       // instrucciones adicionales
   estado        String        @default("programada") // programada, cerrada_inscripciones, en_curso, finalizada
   activa        Boolean       @default(true) // toggle rápido del profesor
+  usaSEB        Boolean       @default(false) // si requiere Safe Exam Browser
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
   
