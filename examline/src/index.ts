@@ -23,9 +23,9 @@ const setupSocketIO = async () => {
   try {
     // Importar dinámicamente Socket.IO
     const { Server } = await import('socket.io');
-    const { verifyToken } = await import('./utils/jwt.js');
-    const { setSocketIO } = await import('./routes/examWindow.route.js');
-    
+    const { verifyToken } = await import('./utils/jwt.ts');
+    const { setSocketIO } = await import('./routes/examWindow.route.ts');
+
     const io = new Server(httpServer, {
       cors: {
         origin: process.env.FRONTEND_URL || "http://localhost:3000",

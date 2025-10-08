@@ -370,7 +370,7 @@ const ExamWindowRoute = (prisma: PrismaClient) => {
   const router = Router();
 
   router.post('/', authenticateToken, requireRole(['professor']), async (req, res) => {
-  const { examId, fechaInicio, duracion, modalidad, cupoMaximo, notas, sinTiempo, requierePresente } = req.body;
+  const { examId, fechaInicio, duracion, modalidad, cupoMaximo, notas, sinTiempo, requierePresente, usaSEB } = req.body;
 
   try {
         const examIdNumber = parseInt(examId);
@@ -626,7 +626,7 @@ router.get('/disponibles', authenticateToken, requireRole(['student']), async (r
   // Actualizar ventana de examen
   router.put('/:id', authenticateToken, requireRole(['professor']), async (req, res) => {
     const windowId = parseInt(req.params.id);
-    const { fechaInicio, duracion, modalidad, cupoMaximo, notas, activa, estado, requierePresente } = req.body;
+    const { fechaInicio, duracion, modalidad, cupoMaximo, notas, activa, estado, requierePresente, usaSEB } = req.body;
 
     try {
       // Verificar que la ventana existe y pertenece al profesor
@@ -653,6 +653,7 @@ router.get('/disponibles', authenticateToken, requireRole(['student']), async (r
       if (activa !== undefined) updateData.activa = activa;
       if (estado) updateData.estado = estado;
       if (requierePresente !== undefined) updateData.requierePresente = Boolean(requierePresente);
+      if (usaSEB !== undefined) updateData.usaSEB = Boolean(usaSEB);
 
       const updatedWindow = await prisma.examWindow.update({
         where: { id: windowId },
