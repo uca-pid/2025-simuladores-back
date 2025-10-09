@@ -28,6 +28,9 @@ const ExamStartRoute = (prisma: PrismaClient) => {
    const frontUrl = `http://localhost:3000/exam-attempt/${examId}?windowId=${windowId}&token=${token}`;
 const escapedFrontUrl = frontUrl.replace(/&/g, '&amp;');
 
+    // URL para salir de SEB - PRUEBA CON GOOGLE
+    const quitUrl = `https://ferrocarriloeste.com.ar/`;
+
 const sebPlist = `<?xml version="1.0" encoding="utf-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple Computer//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -43,7 +46,7 @@ const sebPlist = `<?xml version="1.0" encoding="utf-8"?>
     <key>browserViewMode</key>
     <integer>0</integer>
     <key>quitURLConfirm</key>
-    <false />
+    <true />
     <key>hashedAdminPassword</key>
     <string>${hashedSettingsPassword}</string>
     <key>allowedDisplaysMaxNumber</key>
@@ -261,7 +264,7 @@ const sebPlist = `<?xml version="1.0" encoding="utf-8"?>
     <key>sendBrowserExamKey</key>
     <false />
     <key>quitURL</key>
-    <string />
+<string>https://ferrocarriloeste.com.ar/</string>
     <key>restartExamURL</key>
     <string />
     <key>restartExamUseStartURL</key>
