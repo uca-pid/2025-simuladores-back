@@ -606,7 +606,17 @@ router.get('/disponibles', authenticateToken, requireRole(['student']), async (r
   // Actualizar ventana de examen
   router.put('/:id', authenticateToken, requireRole(['professor']), async (req, res) => {
     const windowId = parseInt(req.params.id);
-    const { fechaInicio, duracion, modalidad, cupoMaximo, notas, activa, estado, requierePresente, usaSEB } = req.body;
+    const { fechaInicio, duracion, modalidad, cupoMaximo, notas, activa, estado, requierePresente, usaSEB, sinTiempo } = req.body;
+
+    // Debug: ver qué llega del frontend
+    console.log('🔍 Backend PUT recibió:', {
+      windowId,
+      sinTiempo,
+      fechaInicio,
+      duracion,
+      modalidad,
+      cupoMaximo
+    });
 
     try {
       // Verificar que la ventana existe y pertenece al profesor
@@ -634,6 +644,10 @@ router.get('/disponibles', authenticateToken, requireRole(['student']), async (r
       if (estado) updateData.estado = estado;
       if (requierePresente !== undefined) updateData.requierePresente = Boolean(requierePresente);
       if (usaSEB !== undefined) updateData.usaSEB = Boolean(usaSEB);
+      if (sinTiempo !== undefined) updateData.sinTiempo = Boolean(sinTiempo);
+
+      // Debug: ver qué se va a actualizar
+      console.log('🔍 Datos que se actualizarán en BD:', updateData);
 
       const updatedWindow = await prisma.examWindow.update({
         where: { id: windowId },
