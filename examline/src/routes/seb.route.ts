@@ -1,10 +1,11 @@
 import { Router, type Request, type Response } from "express"
 import { type PrismaClient } from "@prisma/client"
 import crypto from "crypto"
+import 'dotenv/config';
 
 const ExamStartRoute = (prisma: PrismaClient) => {
   const router = Router()
-
+  const FRONTEND_URL1 = process.env.FRONTEND_URL || "http://localhost:3000"
   // Función para hashear con SHA-256
   function hashSHA256(text: string) {
     return crypto.createHash("sha256").update(text).digest("hex")
@@ -25,7 +26,7 @@ const ExamStartRoute = (prisma: PrismaClient) => {
     const hashedQuitPassword = hashSHA256(contra)
     const hashedSettingsPassword = hashSHA256(contra)
 
-   const frontUrl = `http://localhost:3000/exam-attempt/${examId}?windowId=${windowId}&token=${token}`;
+   const frontUrl = `${FRONTEND_URL1}/exam-attempt/${examId}?windowId=${windowId}&token=${token}`;
 const escapedFrontUrl = frontUrl.replace(/&/g, '&amp;');
 
 const sebPlist = `<?xml version="1.0" encoding="utf-8"?>
