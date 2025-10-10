@@ -18,9 +18,7 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
             userId_examWindowId: { userId, examWindowId }
           },
           include: {
-            examWindow: {
-              include: { exam: true }
-            }
+            examWindow: true
           }
         });
 
@@ -28,17 +26,33 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
           return res.status(403).json({ error: "No estás inscrito en esta ventana" });
         }
 
-        if (!inscription.presente) {
+        // Solo verificar presente si la ventana requiere presentismo
+        // Ser defensivo: si requierePresente es null/undefined, asumir false (acceso libre)
+        const requierePresente = inscription.examWindow.requierePresente === true;
+        if (requierePresente && !inscription.presente) {
           return res.status(403).json({ error: "No estás habilitado para este examen" });
         }
 
-        // Verificar tiempo y estado de la ventana
-        const now = new Date();
-        const startDate = new Date(inscription.examWindow.fechaInicio);
-        const endDate = new Date(startDate.getTime() + (inscription.examWindow.duracion * 60 * 1000));
+        // Verificar que la ventana esté activa
+        if (!inscription.examWindow.activa) {
+          return res.status(403).json({ error: "Esta ventana de examen ha sido desactivada por el profesor" });
+        }
 
-        if (inscription.examWindow.estado !== 'en_curso' || now < startDate || now > endDate) {
-          return res.status(403).json({ error: "El examen no está disponible" });
+        // Verificar disponibilidad del examen
+        if (inscription.examWindow.sinTiempo) {
+          // Para ventanas sin tiempo, solo verificar que esté activa
+          if (inscription.examWindow.estado !== 'programada') {
+            return res.status(403).json({ error: "El examen no está disponible" });
+          }
+        } else {
+          // Para ventanas con tiempo, verificar tiempo y estado
+          const now = new Date();
+          const startDate = new Date(inscription.examWindow.fechaInicio!);
+          const endDate = new Date(startDate.getTime() + (inscription.examWindow.duracion! * 60 * 1000));
+
+          if (inscription.examWindow.estado !== 'en_curso' || now < startDate || now > endDate) {
+            return res.status(403).json({ error: "El examen no está disponible" });
+          }
         }
       }
 
@@ -75,10 +89,11 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
     }
   });
 
-  // PUT /exam-attempts/:attemptId/finish - Finalizar intento (sin respuestas por ahora)
-  router.put("/:attemptId/finish", authenticateToken, requireRole(['student']), async (req, res) => {
+  // PUT /exam-attempts/:attemptId/save-code - Guardar código de programación
+  router.put("/:attemptId/save-code", authenticateToken, requireRole(['student']), async (req, res) => {
     const attemptId = parseInt(req.params.attemptId);
     const userId = req.user!.userId;
+    const { codigoProgramacion } = req.body;
 
     if (isNaN(attemptId)) {
       return res.status(400).json({ error: "ID de intento inválido" });
@@ -87,7 +102,8 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
     try {
       // Verificar que el intento pertenece al usuario
       const attempt = await prisma.examAttempt.findUnique({
-        where: { id: attemptId }
+        where: { id: attemptId },
+        include: { exam: true }
       });
 
       if (!attempt) {
@@ -102,13 +118,72 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
         return res.status(400).json({ error: "El intento ya fue finalizado" });
       }
 
-      // Finalizar intento
+      // Verificar que es un examen de programación
+      if (attempt.exam.tipo !== 'programming') {
+        return res.status(400).json({ error: "Esta ruta es solo para exámenes de programación" });
+      }
+
+      // Guardar código
       const updatedAttempt = await prisma.examAttempt.update({
         where: { id: attemptId },
         data: {
-          finishedAt: new Date(),
-          estado: "finalizado"
+          codigoProgramacion: codigoProgramacion
         }
+      });
+
+      res.json({ message: "Código guardado exitosamente", attempt: updatedAttempt });
+    } catch (error) {
+      console.error('Error saving code:', error);
+      res.status(500).json({ error: "Error guardando código" });
+    }
+  });
+
+  // PUT /exam-attempts/:attemptId/finish - Finalizar intento
+  router.put("/:attemptId/finish", authenticateToken, requireRole(['student']), async (req, res) => {
+    const attemptId = parseInt(req.params.attemptId);
+    const userId = req.user!.userId;
+    const { respuestas, codigoProgramacion } = req.body;
+
+    if (isNaN(attemptId)) {
+      return res.status(400).json({ error: "ID de intento inválido" });
+    }
+
+    try {
+      // Verificar que el intento pertenece al usuario
+      const attempt = await prisma.examAttempt.findUnique({
+        where: { id: attemptId },
+        include: { exam: true }
+      });
+
+      if (!attempt) {
+        return res.status(404).json({ error: "Intento no encontrado" });
+      }
+
+      if (attempt.userId !== userId) {
+        return res.status(403).json({ error: "No autorizado" });
+      }
+
+      if (attempt.estado !== "en_progreso") {
+        return res.status(400).json({ error: "El intento ya fue finalizado" });
+      }
+
+      // Preparar datos de actualización
+      const updateData: any = {
+        finishedAt: new Date(),
+        estado: "finalizado"
+      };
+
+      // Agregar datos específicos según el tipo de examen
+      if (attempt.exam.tipo === 'programming') {
+        updateData.codigoProgramacion = codigoProgramacion;
+      } else if (attempt.exam.tipo === 'multiple_choice') {
+        updateData.respuestas = respuestas || {};
+      }
+
+      // Finalizar intento
+      const updatedAttempt = await prisma.examAttempt.update({
+        where: { id: attemptId },
+        data: updateData
       });
 
       res.json(updatedAttempt);

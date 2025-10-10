@@ -1,5 +1,5 @@
 import { type PrismaClient } from "@prisma/client";
-import { notifyStatusChange } from './examWindow.route.js';
+import { notifyStatusChange } from './examWindow.route';
 import { Router } from "express";
 import { authenticateToken, requireRole } from "../middleware/auth.ts";
 
@@ -35,7 +35,8 @@ const InscriptionRoute = (prisma: PrismaClient) => {
         return res.status(400).json({ error: 'No se puede inscribir a esta ventana en su estado actual' });
       }
 
-      if (new Date() >= new Date(examWindow.fechaInicio)) {
+      // Solo verificar fecha de inicio para ventanas con tiempo
+      if (!examWindow.sinTiempo && examWindow.fechaInicio && new Date() >= new Date(examWindow.fechaInicio)) {
         return res.status(400).json({ error: 'No se puede inscribir a una ventana que ya comenzó' });
       }
 
@@ -223,8 +224,9 @@ const InscriptionRoute = (prisma: PrismaClient) => {
         return res.status(404).json({ error: 'Inscripción no encontrada' });
       }
 
-      // Verificar que la ventana no haya comenzado
-      if (new Date() >= new Date(inscription.examWindow.fechaInicio)) {
+      // Verificar que la ventana no haya comenzado (solo para ventanas con tiempo)
+      if (!inscription.examWindow.sinTiempo && inscription.examWindow.fechaInicio && 
+          new Date() >= new Date(inscription.examWindow.fechaInicio)) {
         return res.status(400).json({ error: 'No se puede cancelar la inscripción una vez que la ventana comenzó' });
       }
 
@@ -258,15 +260,18 @@ const InscriptionRoute = (prisma: PrismaClient) => {
           const ocupados = windowNow.inscripciones.length;
           const max = windowNow.cupoMaximo;
           const now = new Date();
-          const start = new Date(windowNow.fechaInicio);
 
           console.log('    🔍 Post-cancelación: ocupados/max', ocupados, '/', max, 'estado=', windowNow.estado);
 
           // Solo reabrir si:
           // - Estado actual es 'cerrada_inscripciones'
           // - Hay cupo disponible
-          // - Aún no comenzó la ventana
-          if (windowNow.estado === 'cerrada_inscripciones' && ocupados < max && now < start) {
+          // - Para ventanas sin tiempo: siempre se puede reabrir
+          // - Para ventanas con tiempo: aún no comenzó la ventana
+          const canReopen = windowNow.sinTiempo || 
+                          (windowNow.fechaInicio && now < new Date(windowNow.fechaInicio));
+
+          if (windowNow.estado === 'cerrada_inscripciones' && ocupados < max && canReopen) {
             const reopened = await prisma.examWindow.update({
               where: { id: windowNow.id },
               data: { estado: 'programada' }
@@ -356,7 +361,17 @@ const InscriptionRoute = (prisma: PrismaClient) => {
       });
 
       if (!inscription) {
-        return res.status(404).json({ error: 'Inscripción no encontrada o no tienes permisos' });
+        // Verificar si la inscripción existe primero
+        const existsInscription = await prisma.inscription.findUnique({
+          where: { id: inscriptionId }
+        });
+
+        if (!existsInscription) {
+          return res.status(404).json({ error: 'Inscripción no encontrada' });
+        } else {
+          // La inscripción existe pero el profesor no tiene permisos
+          return res.status(403).json({ error: 'No tienes permisos para esta inscripción' });
+        }
       }
 
       const updatedInscription = await prisma.inscription.update({

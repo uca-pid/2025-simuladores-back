@@ -19,6 +19,9 @@ const prismaMock = {
   },
   user: {
     findUnique: jest.fn(),
+  },
+  inscription: {
+    findFirst: jest.fn()
   }
 };
 
@@ -49,7 +52,21 @@ describe('ExamRoute tests', () => {
       profesorId: 2,
       preguntas: [{ id: 1, texto: 'Q1', opciones: ['a','b'], correcta: 0 }]
     });
-    const res = await request(app).get('/exams/1');
+    // Mock inscription data for student
+    prismaMock.inscription = {
+      findFirst: jest.fn().mockResolvedValue({
+        userId: 1,
+        examWindow: {
+          estado: 'en_curso',
+          fechaInicio: new Date(),
+          duracion: 60,
+          exam: { id: 1 }
+        },
+        presente: true
+      })
+    };
+    
+    const res = await request(app).get('/exams/1?windowId=1');
     expect(res.statusCode).toBe(200);
     expect(res.body).toHaveProperty('titulo', 'Test Exam');
     expect(prismaMock.examHistory.upsert).toHaveBeenCalled();
@@ -57,7 +74,18 @@ describe('ExamRoute tests', () => {
 
   it('GET /exams/:examId returns 404 if exam not found', async () => {
     prismaMock.exam.findUnique.mockResolvedValue(null);
-    const res = await request(app).get('/exams/999');
+    // Mock inscription data for student
+    prismaMock.inscription.findFirst.mockResolvedValue({
+      userId: 1,
+      examWindow: {
+        estado: 'en_curso',
+        fechaInicio: new Date(),
+        duracion: 60,
+        exam: { id: 999 }
+      },
+      presente: true
+    });
+    const res = await request(app).get('/exams/999?windowId=1');
     expect(res.statusCode).toBe(404);
   });
 

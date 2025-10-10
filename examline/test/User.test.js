@@ -135,7 +135,7 @@ describe('UserRoute tests', () => {
     // Simulate non-professor trying to update another user
     prismaMock.user.update.mockImplementation(() => { throw new Error(); });
     const res = await request(app).put('/users/999').send({ nombre: 'Fail' });
-    expect(res.statusCode).toBe(500); // since mock throws
+    expect(res.statusCode).toBe(403); // since they're trying to update another user
   });
 
   // ================= DELETE /users/:id =================

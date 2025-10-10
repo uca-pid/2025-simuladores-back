@@ -7,21 +7,61 @@ const ExamRoute = (prisma: PrismaClient) => {
 
   // POST /exams/create (protected - professors only)
   router.post("/create", authenticateToken, requireRole(['professor']), async (req, res) => {
-    const { titulo, preguntas } = req.body;
+    const { 
+      titulo, 
+      preguntas, 
+      tipo = 'multiple_choice', 
+      lenguajeProgramacion, 
+      intellisenseHabilitado = false,
+      enunciadoProgramacion,
+      codigoInicial
+    } = req.body;
 
     try {
+      // Validar campos según el tipo de examen
+      if (tipo === 'programming') {
+        if (!lenguajeProgramacion || !['python', 'javascript'].includes(lenguajeProgramacion)) {
+          return res.status(400).json({ 
+            error: "Para exámenes de programación se requiere especificar el lenguaje (python o javascript)" 
+          });
+        }
+        if (!enunciadoProgramacion) {
+          return res.status(400).json({ 
+            error: "Para exámenes de programación se requiere especificar el enunciado" 
+          });
+        }
+      } else if (tipo === 'multiple_choice') {
+        if (!preguntas || preguntas.length === 0) {
+          return res.status(400).json({ 
+            error: "Para exámenes de multiple choice se requieren preguntas" 
+          });
+        }
+      }
+
+      const examData: any = {
+        titulo,
+        tipo,
+        profesorId: req.user!.userId,
+      };
+
+      // Agregar campos específicos según el tipo
+      if (tipo === 'programming') {
+        examData.lenguajeProgramacion = lenguajeProgramacion;
+        examData.intellisenseHabilitado = intellisenseHabilitado;
+        examData.enunciadoProgramacion = enunciadoProgramacion;
+        examData.codigoInicial = codigoInicial || '';
+      } else if (tipo === 'multiple_choice' && preguntas) {
+        examData.preguntas = {
+          create: preguntas.map((p: any) => ({
+            texto: p.texto,
+            correcta: p.correcta,
+            opciones: p.opciones,
+          })),
+        };
+      }
+
       const examen = await prisma.exam.create({
-        data: {
-          titulo,
-          profesorId: req.user!.userId, // Use authenticated user's ID
-          preguntas: {
-            create: preguntas.map((p: any) => ({
-              texto: p.texto,
-              correcta: p.correcta,
-              opciones: p.opciones,
-            })),
-          },
-        },
+        data: examData,
         include: { preguntas: true },
       });
 
@@ -96,11 +136,7 @@ const ExamRoute = (prisma: PrismaClient) => {
             examWindowId: windowId
           },
           include: {
-            examWindow: {
-              include: {
-                exam: true
-              }
-            }
+            examWindow: true
           }
         });
 
@@ -112,34 +148,56 @@ const ExamRoute = (prisma: PrismaClient) => {
         }
 
         // Verificar que el examen de la ventana coincida con el solicitado
-        if (inscription.examWindow.exam.id !== examId) {
+        if (inscription.examWindow.examId !== examId) {
           return res.status(403).json({ 
             error: "La ventana no corresponde a este examen",
             code: "EXAM_MISMATCH" 
           });
         }
 
-        // Verificar que esté habilitado
-        if (!inscription.presente) {
+        // Solo verificar presente si la ventana requiere presentismo
+        // Ser defensivo: si requierePresente es null/undefined, asumir false (acceso libre)
+        const requierePresente = inscription.examWindow.requierePresente === true;
+        if (requierePresente && !inscription.presente) {
           return res.status(403).json({ 
             error: "No estás habilitado para rendir este examen",
             code: "NOT_ENABLED" 
           });
         }
 
-        // Verificar estado y tiempo de la ventana
-        const now = new Date();
-        const startDate = new Date(inscription.examWindow.fechaInicio);
-        const endDate = new Date(startDate.getTime() + (inscription.examWindow.duracion * 60 * 1000));
-
-        if (inscription.examWindow.estado !== 'en_curso' || now < startDate || now > endDate) {
+        // Verificar que la ventana esté activa
+        if (!inscription.examWindow.activa) {
           return res.status(403).json({ 
-            error: "El examen no está disponible en este momento",
-            code: "EXAM_NOT_AVAILABLE",
-            estado: inscription.examWindow.estado,
-            fechaInicio: inscription.examWindow.fechaInicio,
-            fechaFin: endDate
+            error: "Esta ventana de examen ha sido desactivada por el profesor",
+            code: "WINDOW_DEACTIVATED"
           });
+        }
+
+        // Verificar disponibilidad del examen
+        if (inscription.examWindow.sinTiempo) {
+          // Para ventanas sin tiempo, solo verificar que esté en estado programada y activa
+          if (inscription.examWindow.estado !== 'programada') {
+            return res.status(403).json({ 
+              error: "El examen no está disponible en este momento",
+              code: "EXAM_NOT_AVAILABLE",
+              estado: inscription.examWindow.estado
+            });
+          }
+        } else {
+          // Para ventanas con tiempo, verificar estado y tiempo
+          const now = new Date();
+          const startDate = new Date(inscription.examWindow.fechaInicio!);
+          const endDate = new Date(startDate.getTime() + (inscription.examWindow.duracion! * 60 * 1000));
+
+          if (inscription.examWindow.estado !== 'en_curso' || now < startDate || now > endDate) {
+            return res.status(403).json({ 
+              error: "El examen no está disponible en este momento",
+              code: "EXAM_NOT_AVAILABLE",
+              estado: inscription.examWindow.estado,
+              fechaInicio: inscription.examWindow.fechaInicio,
+              fechaFin: endDate
+            });
+          }
         }
       }
 

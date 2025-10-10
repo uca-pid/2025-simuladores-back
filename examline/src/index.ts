@@ -9,11 +9,6 @@ import cors from 'cors'; // Importar CORS
 import { createServer } from 'http';
 import addRoutes from './routes'; // Asegúrate de que esta ruta sea correcta
 
-// Verificar que la zona horaria se configuró correctamente
-console.log('🌍 Zona horaria del servidor:', process.env.TZ);
-console.log('📅 Fecha actual del servidor:', new Date().toLocaleString('es-AR'));
-console.log('⏰ Fecha UTC:', new Date().toISOString());
-
 const prisma = new PrismaClient();
 const app = express();
 const httpServer = createServer(app);
@@ -23,9 +18,9 @@ const setupSocketIO = async () => {
   try {
     // Importar dinámicamente Socket.IO
     const { Server } = await import('socket.io');
-    const { verifyToken } = await import('./utils/jwt.js');
-    const { setSocketIO } = await import('./routes/examWindow.route.js');
-    
+    const { verifyToken } = await import('./utils/jwt.ts');
+    const { setSocketIO } = await import('./routes/examWindow.route.ts');
+
     const io = new Server(httpServer, {
       cors: {
         origin: process.env.FRONTEND_URL || "http://localhost:3000",
@@ -65,14 +60,12 @@ const setupSocketIO = async () => {
 
     // Eventos de conexión
     io.on('connection', (socket: any) => {
-      console.log(`🟢 Usuario conectado via WebSocket: ${socket.userId} (${socket.userRole})`);
 
       // Unir a sala específica de profesor
       socket.on('join_professor_room', () => {
         if (socket.userRole === 'professor') {
           const roomName = `professor_${socket.userId}`;
           socket.join(roomName);
-          console.log(`👨‍🏫 Profesor ${socket.userId} se unió a sala ULTRA-RÁPIDA: ${roomName}`);
         }
       });
 
@@ -99,7 +92,6 @@ const setupSocketIO = async () => {
 
       // Manejar desconexión
       socket.on('disconnect', () => {
-        console.log(`🔴 Usuario desconectado: ${socket.userId}`);
         if (latencyInterval) {
           clearInterval(latencyInterval);
         }
@@ -108,7 +100,6 @@ const setupSocketIO = async () => {
 
     // Configurar Socket.IO en el módulo de exam windows
     setSocketIO(io);
-    console.log('✅ Socket.IO configurado correctamente para tiempo real');
 
     return io;
   } catch (error) {
@@ -154,7 +145,6 @@ app.use(errorHandler);
 const PORT = process.env.PORT || 4000; 
 const server = httpServer.listen(PORT, () => {
   console.log(`🚀 Server ready at: http://localhost:${PORT}`);
-  console.log(`📡 WebSocket ready for real-time updates`);
 });
 
 // Cerrar la conexión de Prisma cuando se cierra el servidor
