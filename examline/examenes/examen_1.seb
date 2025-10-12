@@ -1,40 +1,4 @@
-import { Router, type Request, type Response } from "express"
-import { type PrismaClient } from "@prisma/client"
-import crypto from "crypto"
-import 'dotenv/config';
-import fs from "fs"
-import path from "path"
-
-const ExamStartRoute = (prisma: PrismaClient) => {
-  const router = Router()
-  const FRONTEND_URL1 = process.env.FRONTEND_URL || "http://localhost:3000"
-  // Función para hashear con SHA-256
-  function hashSHA256(text: string) {
-    return crypto.createHash("sha256").update(text).digest("hex")
-  }
-
-  // Ruta para descargar el .seb dinámico
-  router.get("/download/:examId/:windowId/:token", async (req: Request, res: Response) => {
-    const { examId, windowId, token } = req.params
-    const contra = "12345" // contraseña para quit/admin
-
-    // Validar que el examen exista en la base de datos
-    const exam = await prisma.exam.findUnique({
-      where: { id: Number(examId) }
-    })
-
-    if (!exam) return res.status(404).json({ error: "Examen no encontrado" })
-
-    const hashedQuitPassword = hashSHA256(contra)
-    const hashedSettingsPassword = hashSHA256(contra)
-
-   const frontUrl = `${FRONTEND_URL1}/exam-attempt/${examId}?windowId=${windowId}&token=${token}`;
-const escapedFrontUrl = frontUrl.replace(/&/g, '&amp;');
-
-    // URL para salir de SEB - PRUEBA CON GOOGLE
-    const quitUrl = `https://ferrocarriloeste.com.ar/`;
-
-const sebPlist = `<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple Computer//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
   <dict>
@@ -43,7 +7,7 @@ const sebPlist = `<?xml version="1.0" encoding="utf-8"?>
     <key>kioskMode</key>
     <integer>0</integer>
     <key>startURL</key>
-    <string>${escapedFrontUrl}</string>
+    <string>http://localhost:3000/exam-attempt/1?windowId=2&amp;token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjMsImVtYWlsIjoiam9zZXBlcmV6QGdtYWlsLmNvbSIsIm5vbWJyZSI6Ikpvc2UgUGVyZXoiLCJyb2wiOiJzdHVkZW50IiwiaWF0IjoxNzYwMjkzMTMyLCJleHAiOjE3NjAzMDAzMzIsImlzcyI6ImV4YW1saW5lLWFwcCJ9.mllQeBFGWBj07pG0Xai2IDlZn6aPp7thMesIBACaxxY</string>
     <key>allowQuit</key>
     <true />
     <key>browserViewMode</key>
@@ -51,7 +15,7 @@ const sebPlist = `<?xml version="1.0" encoding="utf-8"?>
     <key>quitURLConfirm</key>
     <true />
     <key>hashedAdminPassword</key>
-    <string>${hashedSettingsPassword}</string>
+    <string>5994471abb01112afcc18159f6cc74b4f511b99806da59b3caf5a9c173cacfc5</string>
     <key>allowedDisplaysMaxNumber</key>
     <integer>5</integer>
     <key>allowedDisplayBuiltin</key>
@@ -1666,26 +1630,4 @@ const sebPlist = `<?xml version="1.0" encoding="utf-8"?>
     <key>systemAlwaysOn</key>
     <true />
   </dict>
-</plist>`;
-
-
-
-    // Carpeta donde se guardarán los .seb
-  const examsFolder = path.join(process.cwd(), "examenes");
-  if (!fs.existsSync(examsFolder)) fs.mkdirSync(examsFolder);
-   const fileName = `examen_${examId}.seb`;
-    const filePath = path.join(examsFolder, fileName);
-
-    // Guardar el .seb en la carpeta
-    fs.writeFileSync(filePath, sebPlist, "utf8");
-
-    // Devolver la URL para que el frontend la abra
-    const sebUrl = `seb://localhost:4000/examenes/${fileName}`;
-    res.json({ sebUrl });
-    
-  })
-
-  return router
-}
-
-export default ExamStartRoute
+</plist>
