@@ -346,7 +346,7 @@ const ExamWindowRoute = (prisma: PrismaClient) => {
   const router = Router();
 
   router.post('/', authenticateToken, requireRole(['professor']), async (req, res) => {
-  const { examId, fechaInicio, duracion, modalidad, cupoMaximo, notas, sinTiempo, requierePresente, usaSEB } = req.body;
+  const { examId, fechaInicio, duracion, modalidad, cupoMaximo, notas, sinTiempo, requierePresente, usaSEB ,kioskMode} = req.body;
 
   // Debug: verificar qué llega del frontend
   console.log('📥 Backend recibió usaSEB:', usaSEB, typeof usaSEB);
@@ -416,6 +416,7 @@ const ExamWindowRoute = (prisma: PrismaClient) => {
           sinTiempo: isSinTiempo,
           requierePresente: Boolean(requierePresente),
           usaSEB: Boolean(usaSEB),
+          kioskoMode: kioskMode, // Inicialmente igual a usaSEB
           estado: isSinTiempo ? 'programada' : 'programada'
         };
 
