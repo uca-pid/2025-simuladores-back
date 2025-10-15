@@ -416,7 +416,7 @@ const ExamWindowRoute = (prisma: PrismaClient) => {
           sinTiempo: isSinTiempo,
           requierePresente: Boolean(requierePresente),
           usaSEB: Boolean(usaSEB),
-          kioskoMode: kioskMode, // Inicialmente igual a usaSEB
+          kioskMode: kioskMode, // Inicialmente igual a usaSEB
           estado: isSinTiempo ? 'programada' : 'programada'
         };
 

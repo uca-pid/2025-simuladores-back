@@ -28,6 +28,7 @@ const ExamStartRoute = (prisma: PrismaClient) => {
 
     if (!examWindow) return res.status(404).json({ error: "Ventana de examen no encontrada" })
     const kioskModeValue = examWindow.kioskMode ? 1 : 0
+  console.log("Kiosk Mode Value:", kioskModeValue);
  
 
     const hashedQuitPassword = hashSHA256(contra)
@@ -64,7 +65,7 @@ const sebPlist = `<?xml version="1.0" encoding="utf-8"?>
     <key>browserWindowAllowReload</key>
     <true />
     <key>showTaskBar</key>
-    <true />
+    <false/>
     <key>allowSwitchToApplications</key>
     <true />
     <key>enableAltEsc</key>
