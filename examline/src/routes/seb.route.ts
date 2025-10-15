@@ -8,6 +8,7 @@ import path from "path"
 const ExamStartRoute = (prisma: PrismaClient) => {
   const router = Router()
   const FRONTEND_URL1 = process.env.FRONTEND_URL || "http://localhost:3000"
+  const BACKEND_URL = process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 4000}`
   // Función para hashear con SHA-256
   function hashSHA256(text: string) {
     return crypto.createHash("sha256").update(text).digest("hex")
@@ -1680,7 +1681,9 @@ const sebPlist = `<?xml version="1.0" encoding="utf-8"?>
     fs.writeFileSync(filePath, sebPlist, "utf8");
 
     // Devolver la URL para que el frontend la abra
-    const sebUrl = `seb://localhost:4000/examenes/${fileName}`;
+    // Construir la URL usando la configuración del backend hosteado
+    const backendHost = BACKEND_URL.replace('http://', '').replace('https://', '');
+    const sebUrl = `seb://${backendHost}/examenes/${fileName}`;
     res.json({ sebUrl });
     
   })
