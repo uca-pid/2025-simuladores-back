@@ -50,13 +50,13 @@ const sebPlist = `<?xml version="1.0" encoding="utf-8"?>
     <key>sebMode</key>
     <integer>0</integer>
     <key>kioskMode</key>
-    <integer>${kioskModeValue}</integer>
+    <integer>0</integer>
     <key>startURL</key>
     <string>${escapedFrontUrl}</string>
     <key>allowQuit</key>
     <true />
     <key>browserViewMode</key>
-    <integer>1</integer>
+    <integer>${kioskModeValue}</integer>
     <key>quitURLConfirm</key>
     <false />
     <key>hashedAdminPassword</key>
