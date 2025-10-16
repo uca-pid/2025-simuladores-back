@@ -25,19 +25,25 @@ const ExamStartRoute = (prisma: PrismaClient) => {
     })
 
     if (!exam) return res.status(404).json({ error: "Examen no encontrado" })
-      const examWindow = await prisma.examWindow.findUnique({
+    const examWindow = await prisma.examWindow.findUnique({
       where: { id: Number(windowId) }
     })
 
     if (!examWindow) return res.status(404).json({ error: "Ventana de examen no encontrada" })
     const kioskModeValue = examWindow.kioskMode ? 1 : 0
-  console.log("Kiosk Mode Value:", kioskModeValue);
- 
+    console.log("Kiosk Mode Value:", kioskModeValue);
+
+    let windowsTaskBar: boolean;
+    if (kioskModeValue === 1) {
+      windowsTaskBar = true;
+    } else {
+      windowsTaskBar = false;
+    }
 
     const hashedQuitPassword = hashSHA256(contra)
     const hashedSettingsPassword = hashSHA256(contra)
 
-   const frontUrl = `${FRONTEND_URL1}/exam-attempt/${examId}?windowId=${windowId}&token=${token}`;
+    const frontUrl = `${FRONTEND_URL1}/exam-attempt/${examId}?windowId=${windowId}&token=${token}`;
 const escapedFrontUrl = frontUrl.replace(/&/g, '&amp;');
 
     // URL para salir de SEB - PRUEBA CON GOOGLE
@@ -50,7 +56,7 @@ const sebPlist = `<?xml version="1.0" encoding="utf-8"?>
     <key>sebMode</key>
     <integer>0</integer>
     <key>kioskMode</key>
-    <integer>0</integer>
+    <integer>${kioskModeValue}</integer>
     <key>startURL</key>
     <string>${escapedFrontUrl}</string>
     <key>allowQuit</key>
@@ -118,7 +124,7 @@ const sebPlist = `<?xml version="1.0" encoding="utf-8"?>
     <key>enableBrowserWindowToolbar</key>
     <false />
     <key>hideBrowserWindowToolbar</key>
-    <true />
+    <${windowsTaskBar} />
     <key>showMenuBar</key>
     <false />
     <key>showSideMenu</key>
