@@ -255,7 +255,34 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
         return res.status(403).json({ error: "El intento debe estar finalizado para ver resultados" });
       }
 
-      res.json(attempt);
+      // Si es un examen de programación, incluir archivos guardados
+      let examFiles: any[] = [];
+      if (attempt.exam.tipo === 'programming') {
+        examFiles = await prisma.examFile.findMany({
+          where: {
+            examId: attempt.examId,
+            userId: userId
+          },
+          select: {
+            id: true,
+            filename: true,
+            content: true,
+            createdAt: true,
+            updatedAt: true
+          },
+          orderBy: {
+            updatedAt: 'desc'
+          }
+        });
+      }
+
+      // Agregar archivos al resultado
+      const result = {
+        ...attempt,
+        examFiles: examFiles
+      };
+
+      res.json(result);
     } catch (error) {
       console.error('Error fetching attempt results:', error);
       res.status(500).json({ error: "Error obteniendo resultados del intento" });
