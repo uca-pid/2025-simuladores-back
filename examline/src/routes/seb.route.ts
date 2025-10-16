@@ -1058,9 +1058,9 @@ const sebPlist = `<?xml version="1.0" encoding="utf-8"?>
         <key>os</key>
         <integer>1</integer>
         <key>executable</key>
-        <string>DiscordCanary.exe</string>
+        <string>D.exe</string>
         <key>originalName</key>
-        <string>DiscordCanary.exe</string>
+        <string>D.exe</string>
         <key>description</key>
         <string />
         <key>identifier</key>
