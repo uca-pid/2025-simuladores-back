@@ -25,6 +25,14 @@ const ExamStartRoute = (prisma: PrismaClient) => {
     })
 
     if (!exam) return res.status(404).json({ error: "Examen no encontrado" })
+      const examWindow = await prisma.examWindow.findUnique({
+      where: { id: Number(windowId) }
+    })
+
+    if (!examWindow) return res.status(404).json({ error: "Ventana de examen no encontrada" })
+    const kioskModeValue = examWindow.kioskMode ? 1 : 0
+  console.log("Kiosk Mode Value:", kioskModeValue);
+ 
 
     const hashedQuitPassword = hashSHA256(contra)
     const hashedSettingsPassword = hashSHA256(contra)
@@ -42,7 +50,7 @@ const sebPlist = `<?xml version="1.0" encoding="utf-8"?>
     <key>sebMode</key>
     <integer>0</integer>
     <key>kioskMode</key>
-    <integer>0</integer>
+    <integer>${kioskModeValue}</integer>
     <key>startURL</key>
     <string>${escapedFrontUrl}</string>
     <key>allowQuit</key>
@@ -60,7 +68,7 @@ const sebPlist = `<?xml version="1.0" encoding="utf-8"?>
     <key>browserWindowAllowReload</key>
     <true />
     <key>showTaskBar</key>
-    <true />
+    <false/>
     <key>allowSwitchToApplications</key>
     <true />
     <key>enableAltEsc</key>
@@ -1053,9 +1061,9 @@ const sebPlist = `<?xml version="1.0" encoding="utf-8"?>
         <key>os</key>
         <integer>1</integer>
         <key>executable</key>
-        <string>DiscordCanary.exe</string>
+        <string>D.exe</string>
         <key>originalName</key>
-        <string>DiscordCanary.exe</string>
+        <string>D.exe</string>
         <key>description</key>
         <string />
         <key>identifier</key>
