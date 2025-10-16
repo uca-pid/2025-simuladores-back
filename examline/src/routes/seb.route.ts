@@ -1555,7 +1555,7 @@ const sebPlist = `<?xml version="1.0" encoding="utf-8"?>
     <key>enablePrivateClipboard</key>
     <true />
     <key>createNewDesktop</key>
-    <false />
+    <true />
     <key>killExplorerShell</key>
     <false />
     <key>enableLogging</key>
