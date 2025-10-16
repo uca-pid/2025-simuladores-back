@@ -50,7 +50,7 @@ const sebPlist = `<?xml version="1.0" encoding="utf-8"?>
     <key>browserViewMode</key>
     <integer>0</integer>
     <key>quitURLConfirm</key>
-    <true />
+    <false />
     <key>hashedAdminPassword</key>
     <string>${hashedSettingsPassword}</string>
     <key>allowedDisplaysMaxNumber</key>
