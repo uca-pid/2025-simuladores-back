@@ -122,7 +122,7 @@ const sebPlist = `<?xml version="1.0" encoding="utf-8"?>
     <key>showMenuBar</key>
     <false />
     <key>showSideMenu</key>
-    <true />
+    <false />
     <key>taskBarHeight</key>
     <integer>40</integer>
     <key>touchOptimized</key>
