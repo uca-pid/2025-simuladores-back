@@ -56,7 +56,7 @@ const sebPlist = `<?xml version="1.0" encoding="utf-8"?>
     <key>allowQuit</key>
     <true />
     <key>browserViewMode</key>
-    <integer>0</integer>
+    <integer>1</integer>
     <key>quitURLConfirm</key>
     <false />
     <key>hashedAdminPassword</key>
@@ -70,13 +70,13 @@ const sebPlist = `<?xml version="1.0" encoding="utf-8"?>
     <key>showTaskBar</key>
     <false/>
     <key>allowSwitchToApplications</key>
-    <true />
+    <false/>
     <key>enableAltEsc</key>
-    <true />
+    <false />
     <key>enableAltTab</key>
-    <true />
+    <false />
     <key>enableEsc</key>
-    <true />
+    <false />
     <key>urlFilterEnable</key>
     <false />
     <key>sebConfigPurpose</key>
@@ -118,7 +118,7 @@ const sebPlist = `<?xml version="1.0" encoding="utf-8"?>
     <key>enableBrowserWindowToolbar</key>
     <false />
     <key>hideBrowserWindowToolbar</key>
-    <false />
+    <true />
     <key>showMenuBar</key>
     <false />
     <key>showSideMenu</key>
@@ -298,7 +298,7 @@ const sebPlist = `<?xml version="1.0" encoding="utf-8"?>
     <key>monitorProcesses</key>
     <false />
     <key>allowFlashFullscreen</key>
-    <false />
+    <true />
     <key>permittedProcesses</key>
     <array></array>
     <key>prohibitedProcesses</key>
@@ -1637,7 +1637,7 @@ const sebPlist = `<?xml version="1.0" encoding="utf-8"?>
     <key>enableAltF4</key>
     <false />
     <key>enableStartMenu</key>
-    <true />
+    <false />
     <key>enableMiddleMouse</key>
     <false />
     <key>enableRightMouse</key>

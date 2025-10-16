@@ -7,7 +7,7 @@
     <key>kioskMode</key>
     <integer>1</integer>
     <key>startURL</key>
-    <string>http://localhost:3000/exam-attempt/1?windowId=2&amp;token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjQsImVtYWlsIjoic3R1MkBnbWFpbC5jb20iLCJub21icmUiOiJzdHUiLCJyb2wiOiJzdHVkZW50IiwiaWF0IjoxNzYwNjI5NTc4LCJleHAiOjE3NjA2MzY3NzgsImlzcyI6ImV4YW1saW5lLWFwcCJ9.uPtP63rC3gWc0cK8rGPPvhK_MOjSCC1kODkplt_aL8Y</string>
+    <string>http://localhost:3000/exam-attempt/2?windowId=3&amp;token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjQsImVtYWlsIjoic3R1MkBnbWFpbC5jb20iLCJub21icmUiOiJzdHUiLCJyb2wiOiJzdHVkZW50IiwiaWF0IjoxNzYwNjI5NTc4LCJleHAiOjE3NjA2MzY3NzgsImlzcyI6ImV4YW1saW5lLWFwcCJ9.uPtP63rC3gWc0cK8rGPPvhK_MOjSCC1kODkplt_aL8Y</string>
     <key>allowQuit</key>
     <true />
     <key>browserViewMode</key>
@@ -1592,7 +1592,7 @@
     <key>enableAltF4</key>
     <false />
     <key>enableStartMenu</key>
-    <false />
+    <true />
     <key>enableMiddleMouse</key>
     <false />
     <key>enableRightMouse</key>
