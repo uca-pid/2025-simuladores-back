@@ -105,6 +105,7 @@ class CodeExecutionService {
       // Usar spawn para mejor manejo de stdin
       const pythonProcess = spawn('python', [tempFile], {
         windowsHide: true,
+        env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
       });
 
       // Configurar timeout
