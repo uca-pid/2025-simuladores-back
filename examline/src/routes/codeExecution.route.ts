@@ -10,11 +10,11 @@ const CodeExecutionRoute = (prisma: PrismaClient) => {
   /**
    * POST /code-execution/run
    * Ejecuta código de programación
-   * Body: { code: string, language: 'python' | 'javascript', examId: number }
+   * Body: { code: string, language: 'python' | 'javascript', examId: number, input?: string }
    */
   router.post('/run', authenticateToken, async (req, res) => {
     try {
-      const { code, language, examId } = req.body;
+      const { code, language, examId, input } = req.body;
 
       // Validaciones
       if (!code || !language) {
@@ -53,6 +53,7 @@ const CodeExecutionRoute = (prisma: PrismaClient) => {
         {
           timeout: 10000, // 10 segundos
           maxMemory: '128m',
+          input: input || '', // Pasar el input del usuario
         }
       );
 

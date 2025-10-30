@@ -1,4 +1,4 @@
-import { exec } from 'child_process';
+import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
 import { writeFile, unlink, mkdir } from 'fs/promises';
 import path from 'path';
@@ -10,6 +10,7 @@ const execAsync = promisify(exec);
 interface ExecutionOptions {
   timeout?: number; // en milisegundos
   maxMemory?: string; // ej: '128m'
+  input?: string; // Input para stdin del programa
 }
 
 interface ExecutionResult {
@@ -64,13 +65,13 @@ class CodeExecutionService {
     options: ExecutionOptions = {}
   ): Promise<ExecutionResult> {
     const startTime = Date.now();
-    const { timeout = 10000, maxMemory = '128m' } = options;
+    const { timeout = 10000, maxMemory = '128m', input = '' } = options;
 
     try {
       if (language === 'python') {
-        return await this.executePython(code, timeout);
+        return await this.executePython(code, timeout, input);
       } else if (language === 'javascript') {
-        return await this.executeJavaScript(code, timeout);
+        return await this.executeJavaScript(code, timeout, input);
       } else {
         throw new Error(`Lenguaje no soportado: ${language}`);
       }
@@ -92,54 +93,87 @@ class CodeExecutionService {
    * Versión futura (Docker):
    * docker run --rm -v ${tempFile}:/code.py -m ${maxMemory} python:3.11-alpine python /code.py
    */
-  private async executePython(code: string, timeout: number): Promise<ExecutionResult> {
+  private async executePython(code: string, timeout: number, input: string = ''): Promise<ExecutionResult> {
     const startTime = Date.now();
     const tempFile = await this.createTempFile(code, '.py');
 
-    try {
-      // Ejecutar Python con timeout
-      const { stdout, stderr } = await execAsync(
-        `python "${tempFile}"`,
-        {
-          timeout,
-          maxBuffer: 1024 * 1024, // 1MB
-          windowsHide: true,
-        }
-      );
+    return new Promise((resolve) => {
+      let stdout = '';
+      let stderr = '';
+      let isTimeout = false;
 
-      const executionTime = Date.now() - startTime;
+      // Usar spawn para mejor manejo de stdin
+      const pythonProcess = spawn('python', [tempFile], {
+        windowsHide: true,
+      });
 
-      return {
-        output: stdout || '',
-        error: stderr || null,
-        exitCode: 0,
-        executionTime
-      };
+      // Configurar timeout
+      const timeoutId = setTimeout(() => {
+        isTimeout = true;
+        pythonProcess.kill('SIGTERM');
+      }, timeout);
 
-    } catch (error: any) {
-      const executionTime = Date.now() - startTime;
-      
-      // Detectar timeout
-      if (error.killed && error.signal === 'SIGTERM') {
-        return {
-          output: '',
-          error: `Tiempo de ejecución excedido (máximo ${timeout}ms)`,
-          exitCode: 124,
-          executionTime
-        };
+      // Capturar stdout
+      pythonProcess.stdout.on('data', (data) => {
+        stdout += data.toString();
+      });
+
+      // Capturar stderr
+      pythonProcess.stderr.on('data', (data) => {
+        stderr += data.toString();
+      });
+
+      // Enviar input si existe
+      if (input) {
+        // Asegurar que el input termine con nueva línea para que input() funcione correctamente
+        const inputWithNewline = input.endsWith('\n') ? input : input + '\n';
+        pythonProcess.stdin.write(inputWithNewline);
+        pythonProcess.stdin.end();
+      } else {
+        pythonProcess.stdin.end();
       }
 
-      return {
-        output: error.stdout || '',
-        error: error.stderr || error.message,
-        exitCode: error.code || 1,
-        executionTime
-      };
+      // Manejar finalización
+      pythonProcess.on('close', async (code) => {
+        clearTimeout(timeoutId);
+        const executionTime = Date.now() - startTime;
 
-    } finally {
-      // Limpiar archivo temporal
-      await this.cleanupTempFile(tempFile);
-    }
+        // Limpiar archivo temporal
+        await this.cleanupTempFile(tempFile);
+
+        if (isTimeout) {
+          resolve({
+            output: stdout || '',
+            error: `Tiempo de ejecución excedido (máximo ${timeout}ms)`,
+            exitCode: 124,
+            executionTime
+          });
+        } else {
+          resolve({
+            output: stdout || '',
+            error: stderr || null,
+            exitCode: code || 0,
+            executionTime
+          });
+        }
+      });
+
+      // Manejar errores del proceso
+      pythonProcess.on('error', async (error) => {
+        clearTimeout(timeoutId);
+        const executionTime = Date.now() - startTime;
+        
+        // Limpiar archivo temporal
+        await this.cleanupTempFile(tempFile);
+
+        resolve({
+          output: '',
+          error: error.message,
+          exitCode: 1,
+          executionTime
+        });
+      });
+    });
   }
 
   /**
@@ -149,51 +183,87 @@ class CodeExecutionService {
    * Versión futura (Docker):
    * docker run --rm -v ${tempFile}:/code.js -m ${maxMemory} node:18-alpine node /code.js
    */
-  private async executeJavaScript(code: string, timeout: number): Promise<ExecutionResult> {
+  private async executeJavaScript(code: string, timeout: number, input: string = ''): Promise<ExecutionResult> {
     const startTime = Date.now();
     const tempFile = await this.createTempFile(code, '.js');
 
-    try {
-      const { stdout, stderr } = await execAsync(
-        `node "${tempFile}"`,
-        {
-          timeout,
-          maxBuffer: 1024 * 1024, // 1MB
-          windowsHide: true,
-        }
-      );
+    return new Promise((resolve) => {
+      let stdout = '';
+      let stderr = '';
+      let isTimeout = false;
 
-      const executionTime = Date.now() - startTime;
+      // Usar spawn para mejor manejo de stdin
+      const nodeProcess = spawn('node', [tempFile], {
+        windowsHide: true,
+      });
 
-      return {
-        output: stdout || '',
-        error: stderr || null,
-        exitCode: 0,
-        executionTime
-      };
+      // Configurar timeout
+      const timeoutId = setTimeout(() => {
+        isTimeout = true;
+        nodeProcess.kill('SIGTERM');
+      }, timeout);
 
-    } catch (error: any) {
-      const executionTime = Date.now() - startTime;
+      // Capturar stdout
+      nodeProcess.stdout.on('data', (data) => {
+        stdout += data.toString();
+      });
 
-      if (error.killed && error.signal === 'SIGTERM') {
-        return {
-          output: '',
-          error: `Tiempo de ejecución excedido (máximo ${timeout}ms)`,
-          exitCode: 124,
-          executionTime
-        };
+      // Capturar stderr
+      nodeProcess.stderr.on('data', (data) => {
+        stderr += data.toString();
+      });
+
+      // Enviar input si existe
+      if (input) {
+        // Asegurar que el input termine con nueva línea
+        const inputWithNewline = input.endsWith('\n') ? input : input + '\n';
+        nodeProcess.stdin.write(inputWithNewline);
+        nodeProcess.stdin.end();
+      } else {
+        nodeProcess.stdin.end();
       }
 
-      return {
-        output: error.stdout || '',
-        error: error.stderr || error.message,
-        exitCode: error.code || 1,
-        executionTime
-      };
+      // Manejar finalización
+      nodeProcess.on('close', async (code) => {
+        clearTimeout(timeoutId);
+        const executionTime = Date.now() - startTime;
 
-    } finally {
-      await this.cleanupTempFile(tempFile);
-    }
+        // Limpiar archivo temporal
+        await this.cleanupTempFile(tempFile);
+
+        if (isTimeout) {
+          resolve({
+            output: stdout || '',
+            error: `Tiempo de ejecución excedido (máximo ${timeout}ms)`,
+            exitCode: 124,
+            executionTime
+          });
+        } else {
+          resolve({
+            output: stdout || '',
+            error: stderr || null,
+            exitCode: code || 0,
+            executionTime
+          });
+        }
+      });
+
+      // Manejar errores del proceso
+      nodeProcess.on('error', async (error) => {
+        clearTimeout(timeoutId);
+        const executionTime = Date.now() - startTime;
+        
+        // Limpiar archivo temporal
+        await this.cleanupTempFile(tempFile);
+
+        resolve({
+          output: '',
+          error: error.message,
+          exitCode: 1,
+          executionTime
+        });
+      });
+    });
   }
 
   /**
