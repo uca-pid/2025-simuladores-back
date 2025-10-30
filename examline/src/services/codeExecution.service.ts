@@ -185,7 +185,10 @@ class CodeExecutionService {
    */
   private async executeJavaScript(code: string, timeout: number, input: string = ''): Promise<ExecutionResult> {
     const startTime = Date.now();
-    const tempFile = await this.createTempFile(code, '.js');
+    
+    // Inyectar polyfill de prompt() para Node.js
+    const codeWithPromptPolyfill = this.injectPromptPolyfill(code);
+    const tempFile = await this.createTempFile(codeWithPromptPolyfill, '.js');
 
     return new Promise((resolve) => {
       let stdout = '';
@@ -264,6 +267,57 @@ class CodeExecutionService {
         });
       });
     });
+  }
+
+  /**
+   * Inyecta un polyfill de prompt() para Node.js que usa readline-sync
+   * Esto permite que el código JavaScript use prompt() como en el navegador
+   */
+  private injectPromptPolyfill(code: string): string {
+    const polyfill = `
+// Polyfill de prompt() para Node.js
+const readline = require('readline');
+const rl = readline.createInterface({
+  input: process.stdin,
+  output: process.stdout,
+  terminal: false
+});
+
+// Array para almacenar las líneas de input
+const inputLines = [];
+let currentLineIndex = 0;
+
+// Leer todas las líneas disponibles de stdin
+rl.on('line', (line) => {
+  inputLines.push(line);
+});
+
+// Función prompt() compatible con browser
+global.prompt = function(message) {
+  if (message) {
+    process.stdout.write(message);
+  }
+  if (currentLineIndex < inputLines.length) {
+    return inputLines[currentLineIndex++];
+  }
+  return null;
+};
+
+// Esperar a que se lean todas las líneas antes de ejecutar el código
+rl.on('close', () => {
+  // Código del usuario comienza aquí
+  try {
+`;
+
+    const epilog = `
+  } catch (error) {
+    console.error(error.message);
+    process.exit(1);
+  }
+});
+`;
+
+    return polyfill + code + epilog;
   }
 
   /**
