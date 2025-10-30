@@ -7,6 +7,7 @@ import InscriptionRoute from "./inscription.route"
 import ExamAttemptRoute from "./examAttempt.route"
 import ExamFilesRoute from "./examFiles.route"
 import ExamStartRoute from "./seb.route"
+import CodeExecutionRoute from "./codeExecution.route"
 import path from "path"
 import express from "express"
 
@@ -24,6 +25,7 @@ const addRoutes = (app: Express, prisma: PrismaClient) => {
     app.use('/exam-attempts', ExamAttemptRoute(prisma))
     app.use('/exam-files', ExamFilesRoute(prisma))
     app.use("/exam-start", ExamStartRoute(prisma))
+    app.use('/code-execution', CodeExecutionRoute(prisma))
     app.use('/examenes', express.static(path.join(process.cwd(), "examenes")));
 
 
