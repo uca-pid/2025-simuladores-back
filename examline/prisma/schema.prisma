@@ -115,10 +115,11 @@ model ExamFile {
   userId    Int
   filename  String
   content   String?
+  version   String   @default("manual") // "manual" | "submission" - tipo de guardado
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   exam      Exam     @relation(fields: [examId], references: [id])
   user      User     @relation(fields: [userId], references: [id])
 
-  @@unique([examId, userId, filename])
+  @@unique([examId, userId, filename, version])
 }
