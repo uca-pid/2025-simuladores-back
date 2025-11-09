@@ -221,6 +221,43 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
     }
   });
 
+  // GET /exam-attempts/my-attempts - Obtener todos los intentos del estudiante autenticado
+  router.get("/my-attempts", authenticateToken, requireRole(['student']), async (req, res) => {
+    const userId = req.user!.userId;
+
+    try {
+      const attempts = await prisma.examAttempt.findMany({
+        where: {
+          userId,
+          estado: "finalizado" // Solo intentos finalizados para estadísticas
+        },
+        include: {
+          exam: {
+            select: {
+              id: true,
+              titulo: true,
+              tipo: true
+            }
+          },
+          examWindow: {
+            select: {
+              id: true,
+              fechaInicio: true
+            }
+          }
+        },
+        orderBy: {
+          finishedAt: 'desc'
+        }
+      });
+
+      res.json(attempts);
+    } catch (error) {
+      console.error('Error fetching student attempts:', error);
+      res.status(500).json({ error: "Error obteniendo intentos del estudiante" });
+    }
+  });
+
   // GET /exam-attempts/:attemptId/results - Ver resultados con respuestas correctas (solo intentos finalizados)
   router.get("/:attemptId/results", authenticateToken, requireRole(['student']), async (req, res) => {
     const attemptId = parseInt(req.params.attemptId);
