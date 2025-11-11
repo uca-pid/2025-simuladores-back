@@ -71,51 +71,73 @@ export const createRankingRoutes = () => {
         }
       });
 
-      // Calcular el tiempo de realización y crear el ranking
-      const ranking = attempts
-        .map((attempt) => {
-          const timeInSeconds = attempt.finishedAt && attempt.startedAt
-            ? Math.floor((new Date(attempt.finishedAt).getTime() - new Date(attempt.startedAt).getTime()) / 1000)
-            : null;
+      // Calcular el tiempo de realización y crear los datos base
+      const attemptsData = attempts.map((attempt) => {
+        const timeInSeconds = attempt.finishedAt && attempt.startedAt
+          ? Math.floor((new Date(attempt.finishedAt).getTime() - new Date(attempt.startedAt).getTime()) / 1000)
+          : null;
 
-          const timeInMinutes = timeInSeconds ? Math.floor(timeInSeconds / 60) : null;
-          const remainingSeconds = timeInSeconds ? timeInSeconds % 60 : null;
+        const timeInMinutes = timeInSeconds ? Math.floor(timeInSeconds / 60) : null;
+        const remainingSeconds = timeInSeconds ? timeInSeconds % 60 : null;
 
-          return {
-            userId: attempt.user.id,
-            nombreEstudiante: attempt.user.nombre,
-            email: attempt.user.email,
-            puntaje: attempt.puntaje,
-            tiempoSegundos: timeInSeconds,
-            tiempoFormateado: timeInSeconds 
-              ? `${timeInMinutes}m ${remainingSeconds}s`
-              : 'N/A',
-            fechaInicio: attempt.startedAt,
-            fechaFin: attempt.finishedAt,
-            esUsuarioActual: attempt.user.id === userId
-          };
-        })
+        return {
+          userId: attempt.user.id,
+          nombreEstudiante: attempt.user.nombre,
+          email: attempt.user.email,
+          puntaje: attempt.puntaje,
+          tiempoSegundos: timeInSeconds,
+          tiempoFormateado: timeInSeconds 
+            ? `${timeInMinutes}m ${remainingSeconds}s`
+            : 'N/A',
+          fechaInicio: attempt.startedAt,
+          fechaFin: attempt.finishedAt,
+          esUsuarioActual: attempt.user.id === userId
+        };
+      });
+
+      // Crear ranking por TIEMPO (para exámenes de programación o tiempos)
+      const rankingPorTiempo = attemptsData
         .filter(r => r.tiempoSegundos !== null) // Solo incluir intentos con tiempo válido
-        .sort((a, b) => a.tiempoSegundos - b.tiempoSegundos) // Ordenar por tiempo (menor primero)
-        .map((r, index) => ({ ...r, posicion: index + 1 })); // Asignar posiciones
+        .sort((a, b) => (a.tiempoSegundos || 0) - (b.tiempoSegundos || 0)) // Ordenar por tiempo (menor primero)
+        .map((r, index) => ({ ...r, posicionTiempo: index + 1 }));
+
+      // Crear ranking por PUNTAJE (para exámenes múltiple choice)
+      const rankingPorPuntaje = attemptsData
+        .filter(r => r.puntaje !== null && r.puntaje !== undefined) // Solo incluir intentos con puntaje
+        .sort((a, b) => {
+          // Primero ordenar por puntaje (mayor a menor)
+          if ((b.puntaje || 0) !== (a.puntaje || 0)) {
+            return (b.puntaje || 0) - (a.puntaje || 0);
+          }
+          // Si tienen el mismo puntaje, ordenar por tiempo (menor a mayor)
+          return (a.tiempoSegundos || Infinity) - (b.tiempoSegundos || Infinity);
+        })
+        .map((r, index) => ({ ...r, posicionPuntaje: index + 1 }));
 
       // Encontrar la posición del usuario actual si es estudiante
-      const posicionUsuario = ranking.find(r => r.esUsuarioActual);
+      const posicionUsuarioTiempo = rankingPorTiempo.find(r => r.esUsuarioActual);
+      const posicionUsuarioPuntaje = rankingPorPuntaje.find(r => r.esUsuarioActual);
 
-      // Calcular estadísticas
-      const mejorIntento = ranking.length > 0 ? ranking[0] : null;
-      const peorIntento = ranking.length > 0 ? ranking[ranking.length - 1] : null;
+      // Calcular estadísticas de TIEMPO
+      const mejorTiempo = rankingPorTiempo.length > 0 ? rankingPorTiempo[0] : null;
+      const peorTiempo = rankingPorTiempo.length > 0 ? rankingPorTiempo[rankingPorTiempo.length - 1] : null;
       
-      console.log(`📊 Ranking stats - Total: ${ranking.length}`);
-      console.log(`📊 Mejor intento:`, mejorIntento);
-      console.log(`📊 Peor intento:`, peorIntento);
-
-      const promedioTiempoCalc = ranking.length > 0
-        ? Math.floor(ranking.reduce((acc, r) => acc + (r.tiempoSegundos || 0), 0) / ranking.length)
+      const promedioTiempoCalc = rankingPorTiempo.length > 0
+        ? Math.floor(rankingPorTiempo.reduce((acc, r) => acc + (r.tiempoSegundos || 0), 0) / rankingPorTiempo.length)
         : null;
 
       const promedioMinutos = promedioTiempoCalc ? Math.floor(promedioTiempoCalc / 60) : null;
       const promedioSegundos = promedioTiempoCalc ? promedioTiempoCalc % 60 : null;
+
+      // Calcular estadísticas de PUNTAJE
+      const mejorPuntaje = rankingPorPuntaje.length > 0 ? rankingPorPuntaje[0] : null;
+      const peorPuntaje = rankingPorPuntaje.length > 0 ? rankingPorPuntaje[rankingPorPuntaje.length - 1] : null;
+      
+      const promedioPuntajeCalc = rankingPorPuntaje.length > 0
+        ? rankingPorPuntaje.reduce((acc, r) => acc + (r.puntaje || 0), 0) / rankingPorPuntaje.length
+        : null;
+
+      console.log(`📊 Ranking stats - Total: ${attemptsData.length}, Tiempo: ${rankingPorTiempo.length}, Puntaje: ${rankingPorPuntaje.length}`);
 
       res.json({
         examWindow: {
@@ -126,18 +148,25 @@ export const createRankingRoutes = () => {
           duracion: examWindow.duracion,
           sinTiempo: examWindow.sinTiempo
         },
-        ranking,
-        totalParticipantes: ranking.length,
-        posicionUsuario: posicionUsuario ? posicionUsuario.posicion : null,
-        estadisticas: {
-          mejorTiempo: mejorIntento?.tiempoSegundos || null,
-          mejorTiempoFormateado: mejorIntento?.tiempoFormateado || null,
+        rankingPorTiempo,
+        rankingPorPuntaje,
+        totalParticipantes: attemptsData.length,
+        posicionUsuarioTiempo: posicionUsuarioTiempo?.posicionTiempo || null,
+        posicionUsuarioPuntaje: posicionUsuarioPuntaje?.posicionPuntaje || null,
+        estadisticasTiempo: {
+          mejorTiempo: mejorTiempo?.tiempoSegundos || null,
+          mejorTiempoFormateado: mejorTiempo?.tiempoFormateado || null,
           promedioTiempo: promedioTiempoCalc,
           promedioTiempoFormateado: promedioTiempoCalc 
             ? `${promedioMinutos}m ${promedioSegundos}s`
             : null,
-          peorTiempo: peorIntento?.tiempoSegundos || null,
-          peorTiempoFormateado: peorIntento?.tiempoFormateado || null
+          peorTiempo: peorTiempo?.tiempoSegundos || null,
+          peorTiempoFormateado: peorTiempo?.tiempoFormateado || null
+        },
+        estadisticasPuntaje: {
+          mejorPuntaje: mejorPuntaje?.puntaje || null,
+          peorPuntaje: peorPuntaje?.puntaje || null,
+          promedioPuntaje: promedioPuntajeCalc ? parseFloat(promedioPuntajeCalc.toFixed(1)) : null
         }
       });
 
