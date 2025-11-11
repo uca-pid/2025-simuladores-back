@@ -199,7 +199,8 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
           const CodeExecutionService = (await import('../services/codeExecution.service.ts')).default;
           const codeExecutionService = new CodeExecutionService();
           
-          let puntajeTotal = 0;
+          let testsPasados = 0;
+          const totalTests = exam.testCases.length;
           const testResults: any[] = [];
           
           for (const testCase of exam.testCases as any[]) {
@@ -219,7 +220,7 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
               const passed = actualOutput === expectedOutput && result.exitCode === 0;
               
               if (passed) {
-                puntajeTotal += testCase.puntos || 0;
+                testsPasados++;
               }
               
               testResults.push({
@@ -228,9 +229,7 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
                 expected: expectedOutput,
                 actual: actualOutput,
                 error: result.error,
-                executionTime: result.executionTime,
-                puntos: testCase.puntos || 0,
-                puntosObtenidos: passed ? (testCase.puntos || 0) : 0
+                executionTime: result.executionTime
               });
               
               console.log(`${passed ? '✅' : '❌'} Test: ${testCase.description} - ${passed ? 'PASÓ' : 'FALLÓ'}`);
@@ -242,16 +241,17 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
                 expected: testCase.expectedOutput,
                 actual: '',
                 error: error.message,
-                executionTime: 0,
-                puntos: testCase.puntos || 0,
-                puntosObtenidos: 0
+                executionTime: 0
               });
             }
           }
           
-          updateData.puntaje = puntajeTotal;
+          // Calcular puntaje como porcentaje de tests pasados
+          const puntajePorcentaje = (testsPasados / totalTests) * 100;
+          
+          updateData.puntaje = puntajePorcentaje;
           updateData.testResults = testResults;
-          console.log(`📊 Puntaje total de programación: ${puntajeTotal}/100`);
+          console.log(`📊 Tests pasados: ${testsPasados}/${totalTests} = ${puntajePorcentaje.toFixed(1)}%`);
         } else {
           console.log('⚠️ No hay test cases definidos para este examen de programación');
         }
