@@ -14,7 +14,8 @@ const ExamRoute = (prisma: PrismaClient) => {
       lenguajeProgramacion, 
       intellisenseHabilitado = false,
       enunciadoProgramacion,
-      codigoInicial
+      codigoInicial,
+      testCases
     } = req.body;
 
     try {
@@ -50,6 +51,7 @@ const ExamRoute = (prisma: PrismaClient) => {
         examData.intellisenseHabilitado = intellisenseHabilitado;
         examData.enunciadoProgramacion = enunciadoProgramacion;
         examData.codigoInicial = codigoInicial || '';
+        examData.testCases = testCases || [];
       } else if (tipo === 'multiple_choice' && preguntas) {
         examData.preguntas = {
           create: preguntas.map((p: any) => ({

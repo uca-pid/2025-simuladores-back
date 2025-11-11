@@ -187,6 +187,74 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
       if (attempt.exam.tipo === 'programming') {
         updateData.codigoProgramacion = codigoProgramacion;
         console.log('💻 Rama programming ejecutada');
+        
+        // NUEVO: Evaluación automática con test cases
+        const exam = await prisma.exam.findUnique({
+          where: { id: attempt.examId }
+        });
+        
+        if (exam && exam.testCases && Array.isArray(exam.testCases) && exam.testCases.length > 0) {
+          console.log('🧪 Ejecutando test cases automáticos...');
+          
+          const CodeExecutionService = (await import('../services/codeExecution.service.ts')).default;
+          const codeExecutionService = new CodeExecutionService();
+          
+          let puntajeTotal = 0;
+          const testResults: any[] = [];
+          
+          for (const testCase of exam.testCases as any[]) {
+            try {
+              const result = await codeExecutionService.executeCode(
+                codigoProgramacion,
+                exam.lenguajeProgramacion as 'python' | 'javascript',
+                { 
+                  input: testCase.input || '',
+                  timeout: 10000 
+                }
+              );
+              
+              // Comparar output (eliminar espacios en blanco extra)
+              const expectedOutput = (testCase.expectedOutput || '').trim();
+              const actualOutput = (result.output || '').trim();
+              const passed = actualOutput === expectedOutput && result.exitCode === 0;
+              
+              if (passed) {
+                puntajeTotal += testCase.puntos || 0;
+              }
+              
+              testResults.push({
+                description: testCase.description || 'Test sin descripción',
+                passed,
+                expected: expectedOutput,
+                actual: actualOutput,
+                error: result.error,
+                executionTime: result.executionTime,
+                puntos: testCase.puntos || 0,
+                puntosObtenidos: passed ? (testCase.puntos || 0) : 0
+              });
+              
+              console.log(`${passed ? '✅' : '❌'} Test: ${testCase.description} - ${passed ? 'PASÓ' : 'FALLÓ'}`);
+            } catch (error: any) {
+              console.error('Error ejecutando test case:', error);
+              testResults.push({
+                description: testCase.description || 'Test sin descripción',
+                passed: false,
+                expected: testCase.expectedOutput,
+                actual: '',
+                error: error.message,
+                executionTime: 0,
+                puntos: testCase.puntos || 0,
+                puntosObtenidos: 0
+              });
+            }
+          }
+          
+          updateData.puntaje = puntajeTotal;
+          updateData.testResults = testResults;
+          console.log(`📊 Puntaje total de programación: ${puntajeTotal}/100`);
+        } else {
+          console.log('⚠️ No hay test cases definidos para este examen de programación');
+        }
       } else if (attempt.exam.tipo === 'multiple_choice') {
         console.log('📝 Rama multiple_choice ejecutada');
         updateData.respuestas = respuestas || {};
