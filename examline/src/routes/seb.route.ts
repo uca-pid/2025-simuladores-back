@@ -31,7 +31,6 @@ const ExamStartRoute = (prisma: PrismaClient) => {
 
     if (!examWindow) return res.status(404).json({ error: "Ventana de examen no encontrada" })
     const kioskModeValue = examWindow.kioskMode ? 1 : 0
-    console.log("Kiosk Mode Value:", kioskModeValue);
 
     let windowsTaskBar: boolean;
     if (kioskModeValue === 1) {

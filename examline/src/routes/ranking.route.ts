@@ -137,8 +137,6 @@ export const createRankingRoutes = () => {
         ? rankingPorPuntaje.reduce((acc, r) => acc + (r.puntaje || 0), 0) / rankingPorPuntaje.length
         : null;
 
-      console.log(`📊 Ranking stats - Total: ${attemptsData.length}, Tiempo: ${rankingPorTiempo.length}, Puntaje: ${rankingPorPuntaje.length}`);
-
       res.json({
         examWindow: {
           id: examWindow.id,

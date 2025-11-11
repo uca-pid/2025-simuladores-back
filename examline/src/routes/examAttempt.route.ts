@@ -144,10 +144,6 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
     const userId = req.user!.userId;
     const { respuestas, codigoProgramacion } = req.body;
 
-    console.log('🔍 Backend - Finalizando intento:', attemptId);
-    console.log('📥 Backend - Respuestas recibidas:', respuestas);
-    console.log('📦 Backend - Body completo:', req.body);
-
     if (isNaN(attemptId)) {
       return res.status(400).json({ error: "ID de intento inválido" });
     }
@@ -158,8 +154,6 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
         where: { id: attemptId },
         include: { exam: true }
       });
-
-      console.log('📝 Backend - Tipo de examen:', attempt?.exam.tipo);
 
       if (!attempt) {
         return res.status(404).json({ error: "Intento no encontrado" });
@@ -180,13 +174,8 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
       };
 
       // Agregar datos específicos según el tipo de examen
-      console.log('🔍 Verificando tipo de examen:', attempt.exam.tipo);
-      console.log('🔍 ¿Es programming?', attempt.exam.tipo === 'programming');
-      console.log('🔍 ¿Es multiple_choice?', attempt.exam.tipo === 'multiple_choice');
-      
       if (attempt.exam.tipo === 'programming') {
         updateData.codigoProgramacion = codigoProgramacion;
-        console.log('💻 Rama programming ejecutada');
         
         // NUEVO: Evaluación automática con test cases
         const exam = await prisma.exam.findUnique({
@@ -194,8 +183,6 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
         });
         
         if (exam && exam.testCases && Array.isArray(exam.testCases) && exam.testCases.length > 0) {
-          console.log('🧪 Ejecutando test cases automáticos...');
-          
           const CodeExecutionService = (await import('../services/codeExecution.service.ts')).default;
           const codeExecutionService = new CodeExecutionService();
           
@@ -231,8 +218,6 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
                 error: result.error,
                 executionTime: result.executionTime
               });
-              
-              console.log(`${passed ? '✅' : '❌'} Test: ${testCase.description} - ${passed ? 'PASÓ' : 'FALLÓ'}`);
             } catch (error: any) {
               console.error('Error ejecutando test case:', error);
               testResults.push({
@@ -251,24 +236,15 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
           
           updateData.puntaje = puntajePorcentaje;
           updateData.testResults = testResults;
-          console.log(`📊 Tests pasados: ${testsPasados}/${totalTests} = ${puntajePorcentaje.toFixed(1)}%`);
-        } else {
-          console.log('⚠️ No hay test cases definidos para este examen de programación');
         }
       } else if (attempt.exam.tipo === 'multiple_choice') {
-        console.log('📝 Rama multiple_choice ejecutada');
         updateData.respuestas = respuestas || {};
-        console.log('📝 Respuestas a guardar:', updateData.respuestas);
         
         // Calcular puntaje automáticamente
-        console.log('🔍 Buscando examen con ID:', attempt.examId);
         const exam = await prisma.exam.findUnique({
           where: { id: attempt.examId },
           include: { preguntas: true }
         });
-
-        console.log('📚 Examen encontrado:', exam ? 'Sí' : 'No');
-        console.log('📚 Cantidad de preguntas:', exam?.preguntas?.length || 0);
 
         if (exam && exam.preguntas && exam.preguntas.length > 0) {
           let correctas = 0;
@@ -276,7 +252,6 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
 
           exam.preguntas.forEach((pregunta, index) => {
             const respuestaEstudiante = respuestas?.[index];
-            console.log(`❓ Pregunta ${index}: correcta=${pregunta.correcta}, estudiante=${respuestaEstudiante}, match=${respuestaEstudiante === pregunta.correcta}`);
             if (respuestaEstudiante !== undefined && respuestaEstudiante === pregunta.correcta) {
               correctas++;
             }
@@ -285,24 +260,14 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
           // Calcular puntaje sobre 100
           const puntaje = (correctas / totalPreguntas) * 100;
           updateData.puntaje = puntaje;
-
-          console.log(`📊 Puntaje calculado: ${correctas}/${totalPreguntas} correctas = ${puntaje.toFixed(2)}%`);
-        } else {
-          console.log('⚠️ No se pudo calcular puntaje - exam o preguntas no encontradas');
         }
-      } else {
-        console.log('❌ Tipo de examen no reconocido:', attempt.exam.tipo);
       }
-
-      console.log('💾 Backend - Datos a actualizar:', updateData);
 
       // Finalizar intento
       const updatedAttempt = await prisma.examAttempt.update({
         where: { id: attemptId },
         data: updateData
       });
-
-      console.log('✅ Backend - Intento actualizado con puntaje:', updatedAttempt.puntaje);
 
       res.json(updatedAttempt);
     } catch (error) {
