@@ -29,6 +29,7 @@ model Exam {
   intellisenseHabilitado Boolean      @default(false) // solo para exámenes de programación
   enunciadoProgramacion String?       // enunciado específico para exámenes de programación
   codigoInicial         String?       // código inicial/template para exámenes de programación
+  testCases             Json?         // casos de prueba para evaluación automática de exámenes de programación
   profesor              User          @relation(fields: [profesorId], references: [id])
   intentos              ExamAttempt[]
   history               ExamHistory[]
@@ -101,6 +102,7 @@ model ExamAttempt {
   respuestas   Json
   codigoProgramacion String? // código del estudiante para exámenes de programación
   puntaje      Float?
+  testResults  Json?       // resultados detallados de los test cases ejecutados
   estado       String      @default("en_progreso")
   examWindow   ExamWindow? @relation(fields: [examWindowId], references: [id])
   exam         Exam        @relation(fields: [examId], references: [id])

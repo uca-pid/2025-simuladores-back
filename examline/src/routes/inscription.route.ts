@@ -42,7 +42,6 @@ const InscriptionRoute = (prisma: PrismaClient) => {
 
       // Verificar cupo
       if (examWindow.inscripciones.length >= examWindow.cupoMaximo) {
-        console.log('  ❌ CUPO COMPLETO - Bloqueando inscripción');
         return res.status(400).json({ error: 'No hay cupo disponible en esta ventana' });
       }
 
@@ -121,22 +120,11 @@ const InscriptionRoute = (prisma: PrismaClient) => {
         }
       });
 
-      // 🔍 DEBUG: Inscripción exitosa
-      console.log('  ✅ INSCRIPCIÓN EXITOSA');
-      console.log('    👤 Usuario ID:', userId);
-      console.log('    🪟 Ventana ID:', examWindowId);
-      console.log('    📚 Examen:', inscription.examWindow.exam.titulo);
-      
       // Verificar cupo actualizado y cerrar automáticamente si se llena
       const ocupados = inscription.examWindow.inscripciones.length;
       const max = (inscription.examWindow as any).cupoMaximo;
-      console.log('    📊 Nuevo estado del cupo:');
-      console.log('      Ocupados:', ocupados);
-      console.log('      Máximo:', max);
-      console.log('      Disponibles:', max - ocupados);
 
       if (ocupados >= max && (inscription.examWindow as any).estado === 'programada') {
-        console.log('  🔒 CUPO COMPLETO - Cerrando inscripciones automáticamente');
         const closed = await prisma.examWindow.update({
           where: { id: examWindowId },
           data: { estado: 'cerrada_inscripciones' },
@@ -230,21 +218,11 @@ const InscriptionRoute = (prisma: PrismaClient) => {
         return res.status(400).json({ error: 'No se puede cancelar la inscripción una vez que la ventana comenzó' });
       }
 
-      // 🔍 DEBUG: Antes de cancelar
-      console.log('🚫 CANCELAR INSCRIPCIÓN DEBUG:');
-      console.log('    📋 Inscription ID:', inscriptionId);
-      console.log('    👤 Usuario ID:', userId);
-      console.log('    🪟 Ventana ID:', inscription.examWindow.id);
-      console.log('    📚 Examen:', inscription.examWindow.exam.titulo);
-      console.log('    ⏰ Estado antes:', inscription.cancelledAt ? 'Ya cancelada' : 'Activa');
-
       // Marcar como cancelada
       const cancelledInscription = await prisma.inscription.update({
         where: { id: inscriptionId },
         data: { cancelledAt: new Date() }
       });
-
-      console.log('    ✅ Cancelación exitosa, cancelledAt:', cancelledInscription.cancelledAt);
 
       // 🔄 Reabrir inscripciones si había estado "cerrada_inscripciones" y ahora hay cupo
       try {
@@ -261,8 +239,6 @@ const InscriptionRoute = (prisma: PrismaClient) => {
           const max = windowNow.cupoMaximo;
           const now = new Date();
 
-          console.log('    🔍 Post-cancelación: ocupados/max', ocupados, '/', max, 'estado=', windowNow.estado);
-
           // Solo reabrir si:
           // - Estado actual es 'cerrada_inscripciones'
           // - Hay cupo disponible
@@ -277,8 +253,6 @@ const InscriptionRoute = (prisma: PrismaClient) => {
               data: { estado: 'programada' }
             });
 
-            console.log('    ✅ Reapertura automática: cerrada_inscripciones → programada');
-
             // Notificar al profesor en tiempo real
             notifyStatusChange(windowNow.exam.profesorId, [{
               id: windowNow.id,
@@ -291,7 +265,8 @@ const InscriptionRoute = (prisma: PrismaClient) => {
           }
         }
       } catch (e) {
-        console.log('⚠️ No se pudo evaluar reapertura automática:', (e as any)?.message || e);
+        // Error evaluando reapertura automática
+        console.error('Error evaluando reapertura:', e);
       }
 
       res.json({ success: true, message: 'Inscripción cancelada correctamente' });

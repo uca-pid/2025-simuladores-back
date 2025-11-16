@@ -176,8 +176,91 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
       // Agregar datos específicos según el tipo de examen
       if (attempt.exam.tipo === 'programming') {
         updateData.codigoProgramacion = codigoProgramacion;
+        
+        // NUEVO: Evaluación automática con test cases
+        const exam = await prisma.exam.findUnique({
+          where: { id: attempt.examId }
+        });
+        
+        if (exam && exam.testCases && Array.isArray(exam.testCases) && exam.testCases.length > 0) {
+          const CodeExecutionService = (await import('../services/codeExecution.service.ts')).default;
+          const codeExecutionService = new CodeExecutionService();
+          
+          let testsPasados = 0;
+          const totalTests = exam.testCases.length;
+          const testResults: any[] = [];
+          
+          for (const testCase of exam.testCases as any[]) {
+            try {
+              const result = await codeExecutionService.executeCode(
+                codigoProgramacion,
+                exam.lenguajeProgramacion as 'python' | 'javascript',
+                { 
+                  input: testCase.input || '',
+                  timeout: 10000 
+                }
+              );
+              
+              // Comparar output (eliminar espacios en blanco extra)
+              const expectedOutput = (testCase.expectedOutput || '').trim();
+              const actualOutput = (result.output || '').trim();
+              const passed = actualOutput === expectedOutput && result.exitCode === 0;
+              
+              if (passed) {
+                testsPasados++;
+              }
+              
+              testResults.push({
+                description: testCase.description || 'Test sin descripción',
+                passed,
+                expected: expectedOutput,
+                actual: actualOutput,
+                error: result.error,
+                executionTime: result.executionTime
+              });
+            } catch (error: any) {
+              console.error('Error ejecutando test case:', error);
+              testResults.push({
+                description: testCase.description || 'Test sin descripción',
+                passed: false,
+                expected: testCase.expectedOutput,
+                actual: '',
+                error: error.message,
+                executionTime: 0
+              });
+            }
+          }
+          
+          // Calcular puntaje como porcentaje de tests pasados
+          const puntajePorcentaje = (testsPasados / totalTests) * 100;
+          
+          updateData.puntaje = puntajePorcentaje;
+          updateData.testResults = testResults;
+        }
       } else if (attempt.exam.tipo === 'multiple_choice') {
         updateData.respuestas = respuestas || {};
+        
+        // Calcular puntaje automáticamente
+        const exam = await prisma.exam.findUnique({
+          where: { id: attempt.examId },
+          include: { preguntas: true }
+        });
+
+        if (exam && exam.preguntas && exam.preguntas.length > 0) {
+          let correctas = 0;
+          const totalPreguntas = exam.preguntas.length;
+
+          exam.preguntas.forEach((pregunta, index) => {
+            const respuestaEstudiante = respuestas?.[index];
+            if (respuestaEstudiante !== undefined && respuestaEstudiante === pregunta.correcta) {
+              correctas++;
+            }
+          });
+
+          // Calcular puntaje sobre 100
+          const puntaje = (correctas / totalPreguntas) * 100;
+          updateData.puntaje = puntaje;
+        }
       }
 
       // Finalizar intento
@@ -218,6 +301,43 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
     } catch (error) {
       console.error('Error checking exam attempt:', error);
       res.status(500).json({ error: "Error verificando intento" });
+    }
+  });
+
+  // GET /exam-attempts/my-attempts - Obtener todos los intentos del estudiante autenticado
+  router.get("/my-attempts", authenticateToken, requireRole(['student']), async (req, res) => {
+    const userId = req.user!.userId;
+
+    try {
+      const attempts = await prisma.examAttempt.findMany({
+        where: {
+          userId,
+          estado: "finalizado" // Solo intentos finalizados para estadísticas
+        },
+        include: {
+          exam: {
+            select: {
+              id: true,
+              titulo: true,
+              tipo: true
+            }
+          },
+          examWindow: {
+            select: {
+              id: true,
+              fechaInicio: true
+            }
+          }
+        },
+        orderBy: {
+          finishedAt: 'desc'
+        }
+      });
+
+      res.json(attempts);
+    } catch (error) {
+      console.error('Error fetching student attempts:', error);
+      res.status(500).json({ error: "Error obteniendo intentos del estudiante" });
     }
   });
 
