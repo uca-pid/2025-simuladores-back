@@ -75,6 +75,13 @@ model ExamWindow {
   updatedAt     DateTime      @updatedAt
   intentos      ExamAttempt[]
   kioskMode     Int           @default(0)
+  // Configuración de Moodle
+  moodleUrl     String?       // URL de la instancia de Moodle
+  moodleToken   String?       // Token de Web Services de Moodle
+  moodleCourseId Int?         // ID del curso en Moodle
+  moodleActivityId Int?       // ID de la actividad/tarea en Moodle
+  moodleSyncEnabled Boolean   @default(false) // Si está habilitada la sincronización
+  lastMoodleSync DateTime?    // Última vez que se sincronizó con Moodle
   exam          Exam          @relation(fields: [examId], references: [id])
   inscripciones Inscription[]
 }

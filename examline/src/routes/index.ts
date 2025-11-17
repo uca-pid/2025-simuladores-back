@@ -9,6 +9,7 @@ import ExamFilesRoute from "./examFiles.route"
 import ExamStartRoute from "./seb.route"
 import CodeExecutionRoute from "./codeExecution.route"
 import { createRankingRoutes } from "./ranking.route"
+import MoodleRoute from "./moodle.route"
 import path from "path"
 import express from "express"
 
@@ -28,6 +29,7 @@ const addRoutes = (app: Express, prisma: PrismaClient) => {
     app.use("/exam-start", ExamStartRoute(prisma))
     app.use('/code-execution', CodeExecutionRoute(prisma))
     app.use('/ranking', createRankingRoutes())
+    app.use('/moodle', MoodleRoute(prisma))
     app.use('/examenes', express.static(path.join(process.cwd(), "examenes")));
 
 
