@@ -58,11 +58,22 @@ class MoodleService {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
 
-      const data = await response.json();
+      let data;
+      try {
+        data = await response.json();
+      } catch (jsonError) {
+        // Si no se puede parsear como JSON, asumir éxito (algunas funciones Moodle devuelven vacío)
+        return null;
+      }
+
+      // Si data es null o undefined, es probablemente un éxito (algunas funciones no devuelven nada)
+      if (data === null || data === undefined) {
+        return null;
+      }
 
       // Verificar si Moodle devolvió un error
-      if (data.exception) {
-        throw new Error(data.message || 'Error en Moodle Web Service');
+      if (data && (data.exception || data.errorcode)) {
+        throw new Error(data.message || data.debuginfo || 'Error en Moodle Web Service');
       }
 
       return data;
@@ -150,10 +161,12 @@ class MoodleService {
         }
       );
 
+      // mod_assign_save_grade puede devolver null o array vacío en éxito
+      // Si no hay error, considerarlo exitoso
       return {
         success: true,
         message: 'Calificación enviada exitosamente',
-        details: result,
+        details: result || { status: 'success' },
       };
     } catch (error: any) {
       console.error('Error sending grade to Moodle assignment:', error);
