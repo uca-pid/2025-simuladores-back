@@ -239,7 +239,7 @@ const MoodleRoute = (prisma: PrismaClient) => {
       }
 
       // Verificar configuración de Moodle
-      if (!windowWithAttempts.moodleSyncEnabled || !windowWithAttempts.moodleUrl || !windowWithAttempts.moodleToken || !windowWithAttempts.moodleActivityId) {
+      if (!windowWithAttempts.moodleUrl || !windowWithAttempts.moodleToken || !windowWithAttempts.moodleActivityId) {
         return res.status(400).json({ 
           error: "La sincronización con Moodle no está configurada para esta ventana" 
         });
