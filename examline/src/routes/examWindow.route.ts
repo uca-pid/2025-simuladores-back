@@ -15,7 +15,7 @@ export const notifyStatusChange = (profesorId: number, changes: any[]) => {
   try {
     broadcastStatusUpdate(profesorId, changes);
   } catch (e) {
-    console.log('⚠️ No se pudo emitir notificación de estado:', (e as any)?.message || e);
+    console.error('Error emitiendo notificación:', e);
   }
 };
 
@@ -112,11 +112,9 @@ async function updateWindowStatuses(prisma: PrismaClient, profesorId?: number, r
     if (now >= startDate && now <= endDate && window.estado !== 'en_curso' && window.estado !== 'finalizada') {
       newStatus = 'en_curso';
       shouldUpdate = true;
-      console.log(`✅ CAMBIO: "${(window as any).exam.titulo}" → ${window.estado} → ${newStatus}`);
     } else if (now > endDate && window.estado !== 'finalizada') {
       newStatus = 'finalizada';
       shouldUpdate = true;
-      console.log(`✅ CAMBIO: "${(window as any).exam.titulo}" → ${window.estado} → ${newStatus}`);
     }
 
     // Actualizar si hay cambio
@@ -217,8 +215,6 @@ const scheduleExactStateChange = async (windowId: number, changeTime: Date, newS
       const actualDelay = Number(executionTime - startTime) / 1000000;
       
       try {
-        console.log(`🎯 EJECUTANDO cambio (precisión: ${actualDelay.toFixed(2)}ms): Ventana ${windowId} → ${newState}`);
-        
         // 🚀 BROADCAST ULTRA-RÁPIDO (antes de BD para latencia mínima)
         const broadcastStart = process.hrtime.bigint();
         broadcastStatusUpdate(profesorId, [{
@@ -229,9 +225,6 @@ const scheduleExactStateChange = async (windowId: number, changeTime: Date, newS
           fechaInicio: changeTime.toISOString(),
           timestamp: Date.now() // Timestamp preciso
         }]);
-        const broadcastEnd = process.hrtime.bigint();
-        const broadcastLatency = Number(broadcastEnd - broadcastStart) / 1000000;
-        console.log(`⚡ Broadcast enviado en ${broadcastLatency.toFixed(2)}ms`);
         
         // Actualizar BD en paralelo (no bloquear WebSocket)
         if (prismaInstance) {
@@ -250,8 +243,6 @@ const scheduleExactStateChange = async (windowId: number, changeTime: Date, newS
         
         // Remover timeout
         scheduledTimeouts.delete(windowId);
-        
-        console.log(`✅ CAMBIO ULTRA-PRECISO completado en ${actualDelay.toFixed(2)}ms`);
       } catch (error) {
         console.error(`❌ Error en cambio programado:`, error);
       }
@@ -347,9 +338,6 @@ const ExamWindowRoute = (prisma: PrismaClient) => {
 
   router.post('/', authenticateToken, requireRole(['professor']), async (req, res) => {
   const { examId, fechaInicio, duracion, modalidad, cupoMaximo, notas, sinTiempo, requierePresente, usaSEB ,kioskMode} = req.body;
-
-  // Debug: verificar qué llega del frontend
-  console.log('📥 Backend recibió usaSEB:', usaSEB, typeof usaSEB);
 
   try {
         const examIdNumber = parseInt(examId);
@@ -582,11 +570,6 @@ router.get('/disponibles', authenticateToken, requireRole(['student']), async (r
       const inscripcionesActivas = window.inscripciones.length;
       const cupoDisponible = window.cupoMaximo - inscripcionesActivas;
       const yaInscrito = window.inscripciones.some(ins => ins.userId === req.user!.userId);
-      
-      console.log(`📊 DEBUG INSCRIPCIONES - Ventana ${window.id} (${window.exam.titulo}):`);
-      console.log(`    👥 Total inscripciones activas: ${inscripcionesActivas}`);
-      console.log(`    🎯 Usuario ${req.user!.userId} inscrito: ${yaInscrito}`);
-      console.log(`    📋 IDs de usuarios inscritos:`, window.inscripciones.map(ins => ins.userId));
       
       return {
         ...window,
@@ -913,11 +896,9 @@ router.get('/disponibles', authenticateToken, requireRole(['student']), async (r
         };
         
         io.to(`professor_${profesorId}`).emit('window_toggle', statusPayload);
-        console.log(`📡 Toggle broadcast → profesor ${profesorId}, ventana ${windowId} → ${updatedWindow.activa ? 'activada' : 'desactivada'}`);
       }
 
       const action = updatedWindow.activa ? 'activada' : 'desactivada';
-      console.log(`🔄 Ventana ${windowId} (${existingWindow.exam.titulo}) ${action} por profesor ${profesorId}`);
 
       res.json({
         success: true,

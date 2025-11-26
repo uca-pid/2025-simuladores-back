@@ -103,8 +103,7 @@ const setupSocketIO = async () => {
 
     return io;
   } catch (error) {
-    console.log('⚠️ Socket.IO no disponible, funcionando sin WebSocket');
-    console.log('💡 Para habilitar tiempo real: npm install socket.io');
+    console.warn('⚠️ Socket.IO no disponible, funcionando sin WebSocket');
     return null;
   }
 };
