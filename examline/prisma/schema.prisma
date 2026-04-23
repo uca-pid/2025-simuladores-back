@@ -75,6 +75,47 @@ model ExamWindow {
   updatedAt     DateTime      @updatedAt
   intentos      ExamAttempt[]
   kioskMode     Int           @default(0)
+  
+  // === Configuración de SEB ===
+  // Modo y visualización
+  sebKioskMode            Int    @default(0)    // 0=normal, 1=kiosk
+  sebShowTaskBar          Boolean @default(false)
+  sebBrowserViewMode      Int    @default(0)
+  sebAllowAddressBar      Boolean @default(false)
+  sebEnableBrowserWindowToolbar Boolean @default(false)
+  
+  // Navegación
+  sebAllowQuit            Boolean @default(true)
+  sebAllowReload          Boolean @default(true)
+  sebAllowBrowsingBackForward Boolean @default(false)
+  
+  // Teclado
+  sebEnableEsc            Boolean @default(false)
+  sebEnableAltTab         Boolean @default(false)
+  sebEnableAltEsc         Boolean @default(false)
+  sebEnableAltF4          Boolean @default(false)
+  sebEnableStartMenu      Boolean @default(false)
+  sebEnableRightMouse     Boolean @default(true)
+  sebEnablePrintScreen    Boolean @default(true)
+  sebEnableFunctionKeys   Boolean @default(true)
+  sebEnableCtrlEsc        Boolean @default(false)
+  
+  // Seguridad
+  sebClipboardPolicy     Int     @default(2)    // 0=permitir todo, 1=bloquear entrada, 2=bloquear todo
+  sebCreateNewDesktop     Boolean @default(true)
+  sebLockOnMessageSocketClose Boolean @default(true)
+  sebAllowSwitchToApplications Boolean @default(false)
+  sebAllowDeveloperConsole Boolean @default(false)
+  
+  // Archivos
+  sebAllowDownloads       Boolean @default(true)
+  sebAllowUploads         Boolean @default(false)
+  
+  // URLs
+  sebQuitUrl              String  @default("https://ferocarcineto.com.ar/")
+  sebQuitPassword         String  @default("12345")
+  sebSettingsPassword     String  @default("12345")
+  
   // Configuración de Moodle
   moodleUrl     String?       // URL de la instancia de Moodle
   moodleToken   String?       // Token de Web Services de Moodle
