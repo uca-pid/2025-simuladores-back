@@ -98,12 +98,12 @@ export async function getExamWindowSEBSettings(
   }
 
   // Valores por defecto - leer desde la base de datos
-  const defaults: ExamWindowSEBSettings = {
+ const defaults: ExamWindowSEBSettings = {
     // Modo kiosk
-    kioskMode: (examWindow as any).sebKioskMode ?? examWindow.kioskMode || 0,
+    kioskMode: (examWindow as any).sebKioskMode ?? (examWindow.kioskMode || 0),
     showTaskBar: (examWindow as any).sebShowTaskBar ?? examWindow.kioskMode === 1,
     allowQuit: (examWindow as any).sebAllowQuit ?? true,
-    browserViewMode: (examWindow as any).sebBrowserViewMode ?? examWindow.kioskMode || 0,
+    browserViewMode: (examWindow as any).sebBrowserViewMode ?? (examWindow.kioskMode || 0),
     allowReload: (examWindow as any).sebAllowReload ?? true,
     allowAddressBar: (examWindow as any).sebAllowAddressBar ?? false,
     enableBrowserWindowToolbar: (examWindow as any).sebEnableBrowserWindowToolbar ?? false,
