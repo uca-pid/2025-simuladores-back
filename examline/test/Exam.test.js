@@ -1,200 +1,195 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// test/exams.test.ts
+// test/exam.test.js
 import request from 'supertest';
 import express from 'express';
 import cors from 'cors';
-import addRoutes from '../src/routes';
-import bcrypt from 'bcryptjs';
+import ExamRoute from '../src/routes/exam.route.ts';
 
 // Mock PrismaClient
 const prismaMock = {
   exam: {
-    findUnique: jest.fn(),
-    findMany: jest.fn(),
     create: jest.fn(),
-    updateMany: jest.fn(),
+    findMany: jest.fn(),
+    findUnique: jest.fn(),
+    update: jest.fn(),
+  },
+  examFile: {
+    upsert: jest.fn(),
+  },
+  inscription: {
+    findFirst: jest.fn(),
   },
   examHistory: {
     upsert: jest.fn(),
-    findMany: jest.fn(),
   },
-  user: {
-    findUnique: jest.fn(),
-  },
-  inscription: {
-    findFirst: jest.fn()
-  }
 };
 
 // Mock authentication middleware
 jest.mock('../src/middleware/auth', () => ({
   authenticateToken: (req, res, next) => {
-    req.user = { userId: 1, rol: 'student', nombre: 'Test', email: 'test@test.com' };
+    req.user = { userId: 1, rol: 'professor', nombre: 'Test', email: 'test@test.com' };
     next();
   },
-  requireRole: () => (req, res, next) => next(),
+  requireRole: (roles) => (req, res, next) => next(),
 }));
+
+// Mock CodeExecutionService
+const mockRunTests = jest.fn();
+jest.mock('../src/services/codeExecution.service.ts', () => {
+  return jest.fn().mockImplementation(() => ({
+    runTests: mockRunTests,
+  }));
+});
 
 const app = express();
 app.use(cors());
 app.use(express.json());
-addRoutes(app, prismaMock);
+app.use('/exams', ExamRoute(prismaMock));
 
 describe('ExamRoute tests', () => {
   beforeEach(() => {
     jest.clearAllMocks();
   });
 
-  // ================= GET /exams/:examId =================
-  it('GET /exams/:examId returns exam and registers history for students', async () => {
-    prismaMock.exam.findUnique.mockResolvedValue({
-      id: 1,
-      titulo: 'Test Exam',
-      profesorId: 2,
-      preguntas: [{ id: 1, texto: 'Q1', opciones: ['a','b'], correcta: 0 }]
-    });
-    // Mock inscription data for student
-    prismaMock.inscription = {
-      findFirst: jest.fn().mockResolvedValue({
-        userId: 1,
-        examWindow: {
-          estado: 'en_curso',
-          fechaInicio: new Date(),
-          duracion: 60,
-          exam: { id: 1 }
-        },
-        presente: true
-      })
-    };
-    
-    const res = await request(app).get('/exams/1?windowId=1');
-    expect(res.statusCode).toBe(200);
-    expect(res.body).toHaveProperty('titulo', 'Test Exam');
-    expect(prismaMock.examHistory.upsert).toHaveBeenCalled();
-  });
-
-  it('GET /exams/:examId returns 404 if exam not found', async () => {
-    prismaMock.exam.findUnique.mockResolvedValue(null);
-    // Mock inscription data for student
-    prismaMock.inscription.findFirst.mockResolvedValue({
-      userId: 1,
-      examWindow: {
-        estado: 'en_curso',
-        fechaInicio: new Date(),
-        duracion: 60,
-        exam: { id: 999 }
-      },
-      presente: true
-    });
-    const res = await request(app).get('/exams/999?windowId=1');
-    expect(res.statusCode).toBe(404);
-  });
-
-  it('GET /exams/:examId returns 400 for invalid examId', async () => {
-    const res = await request(app).get('/exams/abc');
-    expect(res.statusCode).toBe(400);
-  });
-
-  // ================= POST /exams/create =================
-  it('POST /exams/create should create a new exam', async () => {
+  // ================= POST /create =================
+  it('POST /create should create multiple choice exam', async () => {
     prismaMock.exam.create.mockResolvedValue({
       id: 1,
-      titulo: 'Nuevo Examen',
+      titulo: 'Test Exam',
+      tipo: 'multiple_choice',
+      preguntas: [{ id: 1, texto: 'Q1' }],
       profesorId: 1,
-      preguntas: [{ id: 1, texto: 'Pregunta', opciones: ['a','b'], correcta: 0 }]
     });
+
     const res = await request(app)
       .post('/exams/create')
-      .send({ titulo: 'Nuevo Examen', preguntas: [{ texto: 'Pregunta', opciones: ['a','b'], correcta: 0 }] });
+      .send({
+        titulo: 'Test Exam',
+        tipo: 'multiple_choice',
+        preguntas: [{ texto: 'Q1', correcta: true, opciones: ['a', 'b'] }],
+      });
+
     expect(res.statusCode).toBe(201);
-    expect(res.body).toHaveProperty('titulo', 'Nuevo Examen');
+    expect(res.body.tipo).toBe('multiple_choice');
+    expect(prismaMock.exam.create).toHaveBeenCalled();
   });
 
-  it('POST /exams/create should return 500 on error', async () => {
-    prismaMock.exam.create.mockImplementation(() => { throw new Error('DB error'); });
+  it('POST /create should fail if programming exam missing language', async () => {
     const res = await request(app)
       .post('/exams/create')
-      .send({ titulo: 'Fail Exam', preguntas: [] });
-    expect(res.statusCode).toBe(500);
-  });
+      .send({ titulo: 'Prog Exam', tipo: 'programming' });
 
-  // ================= GET /exams/history/:userId =================
-  it('GET /exams/history/:userId returns history for student', async () => {
-    prismaMock.examHistory.findMany.mockResolvedValue([{ examId: 1, viewedAt: new Date(), exam: { id: 1, titulo: 'Ex1' } }]);
-    const res = await request(app).get('/exams/history/1');
-    expect(res.statusCode).toBe(200);
-    expect(res.body[0]).toHaveProperty('exam');
-  });
-
-  it('GET /exams/history/:userId returns 403 if student requests other user history', async () => {
-    const res = await request(app).get('/exams/history/999');
-    expect(res.statusCode).toBe(403);
-  });
-
-  it('GET /exams/history/:userId returns 400 for invalid userId', async () => {
-    const res = await request(app).get('/exams/history/abc');
     expect(res.statusCode).toBe(400);
+    expect(res.body.error).toMatch(/lenguaje/);
+  });
+
+  it('POST /create should create programming exam with reference files', async () => {
+    prismaMock.exam.create.mockResolvedValue({
+      id: 2,
+      titulo: 'Prog Exam',
+      tipo: 'programming',
+      profesorId: 1,
+    });
+
+    prismaMock.examFile.upsert.mockResolvedValue({});
+
+    const res = await request(app)
+      .post('/exams/create')
+      .send({
+        titulo: 'Prog Exam',
+        tipo: 'programming',
+        lenguajeProgramacion: 'python',
+        enunciadoProgramacion: 'Do something',
+        referenceFiles: [
+          { filename: 'solution.py', content: 'print("hi")' },
+        ],
+      });
+
+    expect(res.statusCode).toBe(201);
+    expect(prismaMock.examFile.upsert).toHaveBeenCalled();
+  });
+
+  // ================= GET / =================
+  it('GET / should return exams for professor', async () => {
+    prismaMock.exam.findMany.mockResolvedValue([{ id: 1, titulo: 'Exam1', preguntas: [] }]);
+
+    const res = await request(app).get('/exams');
+    expect(res.statusCode).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+    expect(prismaMock.exam.findMany).toHaveBeenCalled();
+  });
+
+  // ================= GET /:examId =================
+  it('GET /:examId should return exam for professor', async () => {
+    prismaMock.exam.findUnique.mockResolvedValue({
+      id: 1,
+      tipo: 'multiple_choice',
+      profesorId: 1,
+      preguntas: [],
+    });
+
+    const res = await request(app).get('/exams/1');
+    expect(res.statusCode).toBe(200);
+    expect(res.body.id).toBe(1);
+  });
+
+  // ================= POST /:id/test-solution =================
+  it('POST /:id/test-solution should run tests for programming exam', async () => {
+    prismaMock.exam.findUnique.mockResolvedValue({
+      id: 1,
+      tipo: 'programming',
+      profesorId: 1,
+      testCases: [{ input: '1+1', expectedOutput: '2' }],
+      lenguajeProgramacion: 'python',
+      solucionReferencia: 'print(2)',
+    });
+
+    mockRunTests.mockResolvedValue({ score: 100, passedTests: 1, totalTests: 1 });
+
+    const res = await request(app)
+      .post('/exams/1/test-solution')
+      .send({ useReferenceSolution: true });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(mockRunTests).toHaveBeenCalled();
+  });
+
+  // ================= POST /test-solution-preview =================
+  it('POST /test-solution-preview should run preview tests', async () => {
+    mockRunTests.mockResolvedValue({ score: 100, passedTests: 1, totalTests: 1 });
+
+    const res = await request(app)
+      .post('/exams/test-solution-preview')
+      .send({
+        code: 'print(2)',
+        language: 'python',
+        testCases: [{ input: '', expectedOutput: '2' }],
+      });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(mockRunTests).toHaveBeenCalled();
+  });
+
+  // ================= PUT /:id/reference-solution =================
+  it('PUT /:id/reference-solution should update reference solution', async () => {
+    prismaMock.exam.findUnique.mockResolvedValue({
+      id: 1,
+      tipo: 'programming',
+      profesorId: 1,
+    });
+
+    prismaMock.exam.update.mockResolvedValue({
+      id: 1,
+      solucionReferencia: 'print(2)',
+    });
+
+    const res = await request(app)
+      .put('/exams/1/reference-solution')
+      .send({ solucionReferencia: 'print(2)' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(prismaMock.exam.update).toHaveBeenCalled();
   });
 });

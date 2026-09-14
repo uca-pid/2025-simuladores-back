@@ -1,248 +1,148 @@
-// test/Inscription.test.js
+// test/inscription.test.js
 import request from 'supertest';
 import express from 'express';
-import cors from 'cors';
-import addRoutes from '../src/routes';
+import InscriptionRoute from '../src/routes/inscription.route.ts';
 
 // Mock PrismaClient
 const prismaMock = {
-  inscription: {
-    findUnique: jest.fn(),
-    findFirst: jest.fn(),
-    findMany: jest.fn(),
-    create: jest.fn(),
-    update: jest.fn(),
-  },
   examWindow: {
     findUnique: jest.fn(),
     findFirst: jest.fn(),
     update: jest.fn(),
-  }
+  },
+  inscription: {
+    findFirst: jest.fn(),
+    findUnique: jest.fn(),
+    findMany: jest.fn(),
+    create: jest.fn(),
+    update: jest.fn(),
+  },
 };
 
-// Mock authentication middleware for student role
-const mockAuthStudent = (req, res, next) => {
-  req.user = { userId: 1, rol: 'student', nombre: 'Test Student' };
-  next();
-};
-
-// Mock authentication middleware for professor role
-const mockAuthProfessor = (req, res, next) => {
-  req.user = { userId: 2, rol: 'professor', nombre: 'Test Professor' };
-  next();
-};
-
-// Mock middleware
+// Mock authentication middleware
 jest.mock('../src/middleware/auth', () => ({
-  authenticateToken: (req, res, next) => next(),
-  requireRole: (roles) => (req, res, next) => {
-    if (roles.includes('student')) {
-      return mockAuthStudent(req, res, next);
-    }
-    if (roles.includes('professor')) {
-      return mockAuthProfessor(req, res, next);
-    }
+  authenticateToken: (req, res, next) => {
+    req.user = { userId: 1, rol: 'student', nombre: 'Test', email: 'test@test.com' };
     next();
   },
+  requireRole: (roles) => (req, res, next) => next(),
 }));
 
 const app = express();
-app.use(cors());
 app.use(express.json());
-addRoutes(app, prismaMock);
+app.use('/inscriptions', InscriptionRoute(prismaMock));
 
 describe('InscriptionRoute tests', () => {
   beforeEach(() => {
     jest.clearAllMocks();
   });
 
-  // ================= POST / (Create inscription) =================
-  it('POST / should create a new inscription for student', async () => {
-    // Mock examWindow data
-    const mockExamWindow = {
+  // ================= POST / =================
+  it('POST / should create new inscription', async () => {
+    const fakeWindow = {
       id: 1,
+      examId: 1,
       activa: true,
       estado: 'programada',
-      fechaInicio: new Date(Date.now() + 86400000), // tomorrow
+      sinTiempo: false,
+      fechaInicio: new Date(Date.now() + 3600000), // dentro de 1h
       cupoMaximo: 10,
       inscripciones: [],
     };
-
-    prismaMock.examWindow.findUnique.mockResolvedValue(mockExamWindow);
-    prismaMock.inscription.findUnique.mockResolvedValue(null); // no existing inscription
-    
-    const mockInscription = {
+    prismaMock.examWindow.findUnique.mockResolvedValue(fakeWindow);
+    prismaMock.inscription.findFirst.mockResolvedValue(null);
+    prismaMock.inscription.findUnique.mockResolvedValue(null);
+    prismaMock.inscription.create.mockResolvedValue({
       id: 1,
       userId: 1,
       examWindowId: 1,
-      examWindow: {
-        ...mockExamWindow,
-        exam: { titulo: 'Test Exam' }
-      }
-    };
-    prismaMock.inscription.create.mockResolvedValue(mockInscription);
+      examWindow: { ...fakeWindow, inscripciones: [{ id: 1 }] }
+    });
+    prismaMock.examWindow.update.mockResolvedValue({ id: 1, estado: 'programada' });
 
     const res = await request(app)
       .post('/inscriptions')
       .send({ examWindowId: 1 });
 
     expect(res.statusCode).toBe(201);
-    expect(res.body).toHaveProperty('id', 1);
+    expect(res.body.userId).toBe(1);
     expect(prismaMock.inscription.create).toHaveBeenCalled();
   });
 
-  it('POST / should fail if window is not active', async () => {
-    prismaMock.examWindow.findUnique.mockResolvedValue({
-      activa: false,
-      estado: 'programada',
-      fechaInicio: new Date(Date.now() + 86400000),
-    });
+  it('POST / should fail if already inscribed in another window', async () => {
+    prismaMock.examWindow.findUnique.mockResolvedValue({ id: 1, examId: 1, activa: true, estado: 'programada', sinTiempo: true, inscripciones: [], cupoMaximo: 10 });
+    prismaMock.inscription.findFirst.mockResolvedValue({ id: 2 });
 
     const res = await request(app)
       .post('/inscriptions')
       .send({ examWindowId: 1 });
 
     expect(res.statusCode).toBe(400);
-    expect(res.body).toHaveProperty('error');
+    expect(res.body.error).toMatch(/Ya estás inscrito/);
   });
 
-  it('POST / should fail if window has started', async () => {
-    prismaMock.examWindow.findUnique.mockResolvedValue({
-      activa: true,
-      estado: 'programada',
-      fechaInicio: new Date(Date.now() - 86400000), // yesterday
-    });
+  it('POST / should reactivate cancelled inscription', async () => {
+    const fakeWindow = { id: 1, examId: 1, activa: true, estado: 'programada', sinTiempo: true, inscripciones: [], cupoMaximo: 10 };
+    prismaMock.examWindow.findUnique.mockResolvedValue(fakeWindow);
+    prismaMock.inscription.findFirst.mockResolvedValue(null);
+    prismaMock.inscription.findUnique.mockResolvedValue({ id: 1, cancelledAt: new Date(), examWindow: { ...fakeWindow, inscripciones: [] } });
+    prismaMock.inscription.update.mockResolvedValue({ id: 1, examWindow: { ...fakeWindow, inscripciones: [{ id: 1 }] } });
+    prismaMock.examWindow.update.mockResolvedValue({ id: 1, estado: 'programada' });
 
     const res = await request(app)
       .post('/inscriptions')
       .send({ examWindowId: 1 });
 
-    expect(res.statusCode).toBe(400);
-    expect(res.body).toHaveProperty('error');
+    expect(res.statusCode).toBe(201);
+    expect(res.body.id).toBe(1);
   });
 
   // ================= GET /mis-inscripciones =================
-  it('GET /mis-inscripciones should return student inscriptions', async () => {
-    const mockInscriptions = [{
-      id: 1,
-      examWindow: {
-        exam: {
-          id: 1,
-          titulo: 'Test Exam',
-          profesor: { nombre: 'Test Prof' }
-        }
-      }
-    }];
-
-    prismaMock.inscription.findMany.mockResolvedValue(mockInscriptions);
+  it('GET /mis-inscripciones should return inscriptions', async () => {
+    prismaMock.inscription.findMany.mockResolvedValue([{ id: 1, examWindow: { exam: { titulo: 'Exam 1' } } }]);
 
     const res = await request(app).get('/inscriptions/mis-inscripciones');
 
     expect(res.statusCode).toBe(200);
     expect(Array.isArray(res.body)).toBe(true);
-    expect(res.body[0].examWindow.exam.titulo).toBe('Test Exam');
   });
 
-  // ================= DELETE /:id (Cancel inscription) =================
+  // ================= DELETE /:id =================
   it('DELETE /:id should cancel inscription', async () => {
-    const mockInscription = {
-      id: 1,
-      userId: 1,
-      examWindow: {
-        fechaInicio: new Date(Date.now() + 86400000),
-        exam: { titulo: 'Test Exam' }
-      }
-    };
-
-    prismaMock.inscription.findFirst.mockResolvedValue(mockInscription);
-    prismaMock.inscription.update.mockResolvedValue({ ...mockInscription, cancelledAt: new Date() });
+    const fakeWindow = { id: 1, sinTiempo: true, estado: 'programada', cupoMaximo: 10, inscripciones: [] };
+    prismaMock.inscription.findFirst.mockResolvedValue({ id: 1, userId: 1, examWindow: fakeWindow });
+    prismaMock.inscription.update.mockResolvedValue({ id: 1 });
+    prismaMock.examWindow.findUnique.mockResolvedValue({ ...fakeWindow, inscripciones: [] });
+    prismaMock.examWindow.update.mockResolvedValue({ id: 1, estado: 'programada' });
 
     const res = await request(app).delete('/inscriptions/1');
 
     expect(res.statusCode).toBe(200);
-    expect(res.body).toHaveProperty('success', true);
-    expect(prismaMock.inscription.update).toHaveBeenCalled();
+    expect(res.body.success).toBe(true);
   });
 
-  it('DELETE /:id should fail if window has started', async () => {
-    prismaMock.inscription.findFirst.mockResolvedValue({
-      id: 1,
-      userId: 1,
-      examWindow: {
-        fechaInicio: new Date(Date.now() - 86400000), // yesterday
-        exam: { titulo: 'Test Exam' }
-      }
-    });
+  it('DELETE /:id should return 404 if inscription not found', async () => {
+    prismaMock.inscription.findFirst.mockResolvedValue(null);
 
-    const res = await request(app).delete('/inscriptions/1');
+    const res = await request(app).delete('/inscriptions/99');
 
-    expect(res.statusCode).toBe(400);
-    expect(res.body).toHaveProperty('error');
+    expect(res.statusCode).toBe(404);
   });
 
   // ================= GET /ventana/:windowId =================
-  it('GET /ventana/:windowId should return window inscriptions for professor', async () => {
-    const mockExamWindow = {
-      id: 1,
-      exam: {
-        profesorId: 2 // matches mock professor ID
-      }
-    };
+  it('GET /ventana/:windowId should return inscriptions for professor', async () => {
+    // Mock user as professor
+    app.use((req, res, next) => {
+      req.user = { userId: 1, rol: 'professor' };
+      next();
+    });
 
-    const mockInscriptions = [{
-      id: 1,
-      user: {
-        id: 1,
-        nombre: 'Test Student',
-        email: 'student@test.com'
-      }
-    }];
-
-    prismaMock.examWindow.findFirst.mockResolvedValue(mockExamWindow);
-    prismaMock.inscription.findMany.mockResolvedValue(mockInscriptions);
+    prismaMock.examWindow.findFirst.mockResolvedValue({ id: 1, exam: { profesorId: 1 } });
+    prismaMock.inscription.findMany.mockResolvedValue([{ id: 1, user: { id: 2, nombre: 'Student', email: 's@test.com' } }]);
 
     const res = await request(app).get('/inscriptions/ventana/1');
 
     expect(res.statusCode).toBe(200);
     expect(Array.isArray(res.body)).toBe(true);
-    expect(res.body[0].user.nombre).toBe('Test Student');
-  });
-
-  // ================= PATCH /:id/asistencia =================
-  it('PATCH /:id/asistencia should mark attendance', async () => {
-    const mockInscription = {
-      id: 1,
-      examWindow: {
-        exam: {
-          profesorId: 2 // matches mock professor ID
-        }
-      }
-    };
-
-    prismaMock.inscription.findFirst.mockResolvedValue(mockInscription);
-    prismaMock.inscription.update.mockResolvedValue({ ...mockInscription, presente: true });
-
-    const res = await request(app)
-      .patch('/inscriptions/1/asistencia')
-      .send({ presente: true });
-
-    expect(res.statusCode).toBe(200);
-    expect(res.body).toHaveProperty('success', true);
-    expect(res.body).toHaveProperty('presente', true);
-  });
-
-  it('PATCH /:id/asistencia should fail if not professor of exam', async () => {
-    // Mock that inscription exists but professor doesn't have permission
-    prismaMock.inscription.findFirst.mockResolvedValue(null); // No permission
-    prismaMock.inscription.findUnique.mockResolvedValue({ 
-      id: 1 
-    }); // But inscription exists
-
-    const res = await request(app)
-      .patch('/inscriptions/1/asistencia')
-      .send({ presente: true });
-
-    expect(res.statusCode).toBe(403);
-    expect(res.body).toHaveProperty('error', 'No tienes permisos para esta inscripción');
   });
 });

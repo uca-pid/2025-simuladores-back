@@ -28,7 +28,6 @@ const addRoutes = (app: Express, prisma: PrismaClient) => {
     app.use('/exam-files', ExamFilesRoute(prisma))
     app.use("/exam-start", ExamStartRoute(prisma))
     app.use('/code-execution', CodeExecutionRoute(prisma))
-    app.use('/ranking', createRankingRoutes())
     app.use('/moodle', MoodleRoute(prisma))
     app.use('/examenes', express.static(path.join(process.cwd(), "examenes")));
 
