@@ -1,7 +1,16 @@
 import jwt, { type JwtPayload } from 'jsonwebtoken';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-in-production';
-const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '2h'; // 2 hours
+const JWT_SECRET = process.env.JWT_SECRET;
+const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN; // 2 hours as requested
+
+if (!JWT_SECRET) {
+  throw new Error("JWT_SECRET no está definido en las variables de entorno");
+}
+
+if (!JWT_EXPIRES_IN) {
+  throw new Error("JWT_EXPIRES_IN no está definido en las variables de entorno");
+}
+
 export interface JWTPayload {
   userId: number;
   email: string;

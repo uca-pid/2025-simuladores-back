@@ -1,9 +1,11 @@
 import { type PrismaClient } from "@prisma/client";
 import { Router } from "express";
 import { authenticateToken, requireRole, requireOwnership } from "../middleware/auth.ts";
+import CodeExecutionService from "../services/codeExecution.service.ts";
 
 const ExamRoute = (prisma: PrismaClient) => {
   const router = Router();
+  const codeExecutionService = new CodeExecutionService();
 
   // POST /exams/create (protected - professors only)
   router.post("/create", authenticateToken, requireRole(['professor']), async (req, res) => {
@@ -16,7 +18,9 @@ const ExamRoute = (prisma: PrismaClient) => {
       intellisenseHabilitado = false,
       enunciadoProgramacion,
       codigoInicial,
-      testCases
+      testCases,
+      solucionReferencia,
+      referenceFiles // Array de archivos de referencia
     } = req.body;
 
     try {
@@ -54,6 +58,7 @@ const ExamRoute = (prisma: PrismaClient) => {
         examData.enunciadoProgramacion = enunciadoProgramacion;
         examData.codigoInicial = codigoInicial || '';
         examData.testCases = testCases || [];
+        examData.solucionReferencia = solucionReferencia || null;
       } else if (tipo === 'multiple_choice' && preguntas) {
         examData.preguntas = {
           create: preguntas.map((p: any) => ({
@@ -69,6 +74,39 @@ const ExamRoute = (prisma: PrismaClient) => {
         data: examData,
         include: { preguntas: true },
       });
+
+      // Guardar archivos de referencia si existen (solo para exámenes de programación)
+      if (tipo === 'programming' && referenceFiles && Array.isArray(referenceFiles) && referenceFiles.length > 0) {
+        // Filtrar archivos que tengan contenido
+        const filesWithContent = referenceFiles.filter((f: any) => f.filename && f.content && f.content.trim());
+        
+        if (filesWithContent.length > 0) {
+          // Guardar cada archivo en la tabla ExamFile
+          await Promise.all(filesWithContent.map((file: any) =>
+            prisma.examFile.upsert({
+              where: {
+                examId_userId_filename_version: {
+                  examId: examen.id,
+                  userId: req.user!.userId,
+                  filename: file.filename,
+                  version: 'reference_solution'
+                }
+              },
+              update: {
+                content: file.content,
+                updatedAt: new Date()
+              },
+              create: {
+                examId: examen.id,
+                userId: req.user!.userId,
+                filename: file.filename,
+                content: file.content,
+                version: 'reference_solution'
+              }
+            })
+          ));
+        }
+      }
 
       res.status(201).json(examen);
     } catch (err) {
@@ -181,16 +219,6 @@ const ExamRoute = (prisma: PrismaClient) => {
           });
         }
 
-        // Solo verificar presente si la ventana requiere presentismo
-        // Ser defensivo: si requierePresente es null/undefined, asumir false (acceso libre)
-        const requierePresente = inscription.examWindow.requierePresente === true;
-        if (requierePresente && !inscription.presente) {
-          return res.status(403).json({ 
-            error: "No estás habilitado para rendir este examen",
-            code: "NOT_ENABLED" 
-          });
-        }
-
         // Verificar que la ventana esté activa
         if (!inscription.examWindow.activa) {
           return res.status(403).json({ 
@@ -201,14 +229,8 @@ const ExamRoute = (prisma: PrismaClient) => {
 
         // Verificar disponibilidad del examen
         if (inscription.examWindow.sinTiempo) {
-          // Para ventanas sin tiempo, solo verificar que esté en estado programada y activa
-          if (inscription.examWindow.estado !== 'programada') {
-            return res.status(403).json({ 
-              error: "El examen no está disponible en este momento",
-              code: "EXAM_NOT_AVAILABLE",
-              estado: inscription.examWindow.estado
-            });
-          }
+      
+    
         } else {
           // Para ventanas con tiempo, verificar estado y tiempo
           const now = new Date();
@@ -270,34 +292,179 @@ const ExamRoute = (prisma: PrismaClient) => {
         return res.json(sanitizedExam);
       }
 
-      res.json(exam);
+      // 🔒 Validación de propiedad para profesores
+      if (req.user!.rol === 'professor' && exam.profesorId !== req.user!.userId) {
+        return res.status(403).json({ error: "No tienes permiso para ver este examen" });
+      }
+
+      // Ocultar solución de referencia si no es el profesor dueño
+      const examResponse = { ...exam };
+      if (exam.profesorId !== req.user!.userId) {
+        delete (examResponse as any).solucionReferencia;
+      }
+
+      res.json(examResponse);
     } catch (error) {
       console.error('Error fetching exam:', error);
       res.status(500).json({ error: "Error al obtener el examen" });
     }
   });
 
-  // GET /exams/history/:userId → obtiene historial de exámenes (protected)
-  router.get("/history/:userId", authenticateToken, async (req, res) => {
-    const targetUserId = parseInt(req.params.userId);
-    if (isNaN(targetUserId)) return res.status(400).json({ error: "userId inválido" });
-
-    // Users can only see their own history, professors can see any student's history
-    if (req.user!.rol === 'student' && req.user!.userId !== targetUserId) {
-      return res.status(403).json({ error: "No puedes ver el historial de otro usuario" });
-    }
-
+  // POST /exams/:id/test-solution (protected - professors only)
+  // Ejecuta tests contra código temporal o solución de referencia
+  router.post("/:id/test-solution", authenticateToken, requireRole(['professor']), async (req, res) => {
     try {
-      const history = await prisma.examHistory.findMany({
-        where: { userId: targetUserId },
-        include: { exam: true },
-        orderBy: { viewedAt: "desc" },
+      const examId = parseInt(req.params.id);
+      const { code, useReferenceSolution } = req.body;
+
+      if (isNaN(examId)) {
+        return res.status(400).json({ error: "ID de examen inválido" });
+      }
+
+      // Verificar que el examen existe y pertenece al profesor
+      const exam = await prisma.exam.findUnique({
+        where: { id: examId }
       });
 
-      res.json(history);
-    } catch (error) {
-      console.error('Error fetching exam history:', error);
-      res.status(500).json({ error: "Error al obtener historial" });
+      if (!exam) {
+        return res.status(404).json({ error: "Examen no encontrado" });
+      }
+
+      if (exam.profesorId !== req.user!.userId) {
+        return res.status(403).json({ error: "No tienes permiso para ejecutar tests en este examen" });
+      }
+
+      if (exam.tipo !== 'programming') {
+        return res.status(400).json({ error: "Este examen no es de tipo programación" });
+      }
+
+      if (!exam.testCases || !Array.isArray(exam.testCases) || exam.testCases.length === 0) {
+        return res.status(400).json({ error: "El examen no tiene test cases configurados" });
+      }
+
+      // Determinar qué código ejecutar
+      let codeToExecute: string;
+      
+      if (useReferenceSolution) {
+        if (!exam.solucionReferencia) {
+          return res.status(400).json({ error: "El examen no tiene una solución de referencia guardada" });
+        }
+        codeToExecute = exam.solucionReferencia;
+      } else {
+        if (!code) {
+          return res.status(400).json({ error: "Debe proporcionar código para ejecutar" });
+        }
+        codeToExecute = code;
+      }
+
+      // Ejecutar los tests
+      const testResults = await codeExecutionService.runTests(
+        codeToExecute,
+        exam.lenguajeProgramacion as 'python' | 'javascript',
+        exam.testCases as any[],
+        { timeout: 10000 }
+      );
+
+      return res.json({
+        success: true,
+        ...testResults
+      });
+
+    } catch (error: any) {
+      console.error('Error ejecutando tests:', error);
+      return res.status(500).json({
+        error: 'Error interno al ejecutar tests',
+        details: error.message
+      });
+    }
+  });
+
+  // POST /exams/test-solution-preview (protected - professors only)
+  // Ejecuta tests contra código durante la creación del examen (sin examen guardado)
+  router.post("/test-solution-preview", authenticateToken, requireRole(['professor']), async (req, res) => {
+    try {
+      const { code, language, testCases } = req.body;
+
+      if (!code) {
+        return res.status(400).json({ error: "Debe proporcionar código para ejecutar" });
+      }
+
+      if (!language || !['python', 'javascript'].includes(language)) {
+        return res.status(400).json({ error: "Lenguaje no válido. Use 'python' o 'javascript'" });
+      }
+
+      if (!testCases || !Array.isArray(testCases) || testCases.length === 0) {
+        return res.status(400).json({ error: "Debe proporcionar test cases" });
+      }
+
+      // Ejecutar los tests
+      const testResults = await codeExecutionService.runTests(
+        code,
+        language as 'python' | 'javascript',
+        testCases,
+        { timeout: 10000 }
+      );
+
+      return res.json({
+        success: true,
+        ...testResults
+      });
+
+    } catch (error: any) {
+      console.error('Error ejecutando tests en preview:', error);
+      return res.status(500).json({
+        error: 'Error interno al ejecutar tests',
+        details: error.message
+      });
+    }
+  });
+
+  // PUT /exams/:id/reference-solution (protected - professors only)
+  // Guarda o actualiza la solución de referencia
+  router.put("/:id/reference-solution", authenticateToken, requireRole(['professor']), async (req, res) => {
+    try {
+      const examId = parseInt(req.params.id);
+      const { solucionReferencia } = req.body;
+
+      if (isNaN(examId)) {
+        return res.status(400).json({ error: "ID de examen inválido" });
+      }
+
+      // Verificar que el examen existe y pertenece al profesor
+      const exam = await prisma.exam.findUnique({
+        where: { id: examId }
+      });
+
+      if (!exam) {
+        return res.status(404).json({ error: "Examen no encontrado" });
+      }
+
+      if (exam.profesorId !== req.user!.userId) {
+        return res.status(403).json({ error: "No tienes permiso para modificar este examen" });
+      }
+
+      if (exam.tipo !== 'programming') {
+        return res.status(400).json({ error: "Este examen no es de tipo programación" });
+      }
+
+      // Actualizar la solución de referencia
+      const updatedExam = await prisma.exam.update({
+        where: { id: examId },
+        data: { solucionReferencia }
+      });
+
+      return res.json({
+        success: true,
+        message: "Solución de referencia actualizada correctamente",
+        exam: updatedExam
+      });
+
+    } catch (error: any) {
+      console.error('Error guardando solución de referencia:', error);
+      return res.status(500).json({
+        error: 'Error interno al guardar solución de referencia',
+        details: error.message
+      });
     }
   });
 

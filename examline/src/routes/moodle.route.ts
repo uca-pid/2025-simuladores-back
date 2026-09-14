@@ -246,11 +246,18 @@ const MoodleRoute = (prisma: PrismaClient) => {
       }
 
       // Preparar calificaciones SOLO del examen correcto
-      const grades = windowWithAttempts.intentos.map(attempt => ({
-        studentId: '', // Se obtendrá por email
-        studentEmail: attempt.user.email,
-        grade: attempt.puntaje || 0
-      }));
+      // Usar calificacionManual si existe, sino puntaje automático
+      const grades = windowWithAttempts.intentos.map(attempt => {
+        const notaFinal = attempt.calificacionManual !== null && attempt.calificacionManual !== undefined
+          ? attempt.calificacionManual
+          : (attempt.puntaje || 0);
+        
+        return {
+          studentId: '', // Se obtendrá por email
+          studentEmail: attempt.user.email,
+          grade: notaFinal
+        };
+      });
 
       if (grades.length === 0) {
         return res.status(400).json({ 

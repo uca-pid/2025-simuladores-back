@@ -1,5 +1,4 @@
 import { type PrismaClient } from "@prisma/client";
-import { notifyStatusChange } from './examWindow.route';
 import { Router } from "express";
 import { authenticateToken, requireRole } from "../middleware/auth.ts";
 
@@ -25,6 +24,26 @@ const InscriptionRoute = (prisma: PrismaClient) => {
       if (!examWindow) {
         return res.status(404).json({ error: 'Ventana de examen no encontrada' });
       }
+
+      // ⛔ NUEVA VALIDACIÓN
+      const alreadyInscribedSameExam = await prisma.inscription.findFirst({
+        where: {
+          userId,
+          cancelledAt: null,
+          examWindow: {
+            examId: examWindow.examId,
+              NOT: { id: examWindowId }
+          }
+        }
+      });
+
+    if (alreadyInscribedSameExam) {
+      return res.status(400).json({
+        error: 'Ya estás inscrito en otra ventana de este examen'
+      });
+    }     
+
+      
 
       // Validaciones
       if (!examWindow.activa) {
@@ -88,15 +107,7 @@ const InscriptionRoute = (prisma: PrismaClient) => {
             include: { exam: { select: { profesorId: true, titulo: true } } }
           });
 
-          // Notificar al profesor
-          notifyStatusChange((closed.exam as any).profesorId, [{
-            id: closed.id,
-            titulo: (closed.exam as any).titulo,
-            estadoAnterior: 'programada',
-            estadoNuevo: 'cerrada_inscripciones',
-            fechaInicio: (closed as any).fechaInicio,
-            timestamp: Date.now()
-          }]);
+          // Notificación Socket.IO eliminada - cambio se reflejará al refrescar
         }
 
         return res.status(201).json(reactivatedInscription);
@@ -131,15 +142,7 @@ const InscriptionRoute = (prisma: PrismaClient) => {
           include: { exam: { select: { profesorId: true, titulo: true } } }
         });
 
-        // Notificar al profesor en tiempo real
-        notifyStatusChange((closed.exam as any).profesorId, [{
-          id: closed.id,
-          titulo: (closed.exam as any).titulo,
-          estadoAnterior: 'programada',
-          estadoNuevo: 'cerrada_inscripciones',
-          fechaInicio: (closed as any).fechaInicio,
-          timestamp: Date.now()
-        }]);
+        // Notificación Socket.IO eliminada - cambio se reflejará al refrescar
       }
 
       res.status(201).json(inscription);
@@ -253,15 +256,7 @@ const InscriptionRoute = (prisma: PrismaClient) => {
               data: { estado: 'programada' }
             });
 
-            // Notificar al profesor en tiempo real
-            notifyStatusChange(windowNow.exam.profesorId, [{
-              id: windowNow.id,
-              titulo: windowNow.exam.titulo,
-              estadoAnterior: 'cerrada_inscripciones',
-              estadoNuevo: 'programada',
-              fechaInicio: windowNow.fechaInicio,
-              timestamp: Date.now()
-            }]);
+            // Notificación Socket.IO eliminada - cambio se reflejará al refrescar
           }
         }
       } catch (e) {
@@ -313,50 +308,6 @@ const InscriptionRoute = (prisma: PrismaClient) => {
       res.json(inscriptions);
     } catch (error: any) {
       console.error('Error obteniendo inscripciones de ventana:', error);
-      res.status(500).json({ error: 'Error interno del servidor' });
-    }
-  });
-
-  // Marcar asistencia (para profesores)
-  router.patch('/:id/asistencia', authenticateToken, requireRole(['professor']), async (req, res) => {
-    const inscriptionId = parseInt(req.params.id);
-    const { presente } = req.body;
-
-    try {
-      // Verificar que la inscripción existe y la ventana pertenece al profesor
-      const inscription = await prisma.inscription.findFirst({
-        where: {
-          id: inscriptionId,
-          examWindow: {
-            exam: {
-              profesorId: req.user!.userId
-            }
-          }
-        }
-      });
-
-      if (!inscription) {
-        // Verificar si la inscripción existe primero
-        const existsInscription = await prisma.inscription.findUnique({
-          where: { id: inscriptionId }
-        });
-
-        if (!existsInscription) {
-          return res.status(404).json({ error: 'Inscripción no encontrada' });
-        } else {
-          // La inscripción existe pero el profesor no tiene permisos
-          return res.status(403).json({ error: 'No tienes permisos para esta inscripción' });
-        }
-      }
-
-      const updatedInscription = await prisma.inscription.update({
-        where: { id: inscriptionId },
-        data: { presente: presente }
-      });
-
-      res.json({ success: true, presente: updatedInscription.presente });
-    } catch (error: any) {
-      console.error('Error marcando asistencia:', error);
       res.status(500).json({ error: 'Error interno del servidor' });
     }
   });
