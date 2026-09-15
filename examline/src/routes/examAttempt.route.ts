@@ -26,13 +26,6 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
           return res.status(403).json({ error: "No estás inscrito en esta ventana" });
         }
 
-        // Solo verificar presente si la ventana requiere presentismo
-        // Ser defensivo: si requierePresente es null/undefined, asumir false (acceso libre)
-        const requierePresente = inscription.examWindow.requierePresente === true;
-        if (requierePresente && !inscription.presente) {
-          return res.status(403).json({ error: "No estás habilitado para este examen" });
-        }
-
         // Verificar que la ventana esté activa
         if (!inscription.examWindow.activa) {
           return res.status(403).json({ error: "Esta ventana de examen ha sido desactivada por el profesor" });
@@ -41,7 +34,7 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
         // Verificar disponibilidad del examen
         if (inscription.examWindow.sinTiempo) {
           // Para ventanas sin tiempo, solo verificar que esté activa
-          if (inscription.examWindow.estado !== 'programada') {
+          if (!inscription.examWindow.activa) {
             return res.status(403).json({ error: "El examen no está disponible" });
           }
         } else {
@@ -57,13 +50,12 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
       }
 
       // Verificar si ya existe un intento
-      const existingAttempt = await prisma.examAttempt.findUnique({
+      // Usar findFirst en lugar de findUnique para manejar mejor el null
+      const existingAttempt = await prisma.examAttempt.findFirst({
         where: {
-          userId_examId_examWindowId: {
-            userId,
-            examId,
-            examWindowId: examWindowId || null
-          }
+          userId,
+          examId,
+          examWindowId: examWindowId || null
         }
       });
 
@@ -71,18 +63,58 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
         return res.json(existingAttempt);
       }
 
-      // Crear nuevo intento
-      const attempt = await prisma.examAttempt.create({
-        data: {
-          userId,
-          examId,
-          examWindowId: examWindowId || null,
-          respuestas: {},
-          estado: "en_progreso"
-        }
+      // Obtener el examen para verificar si tiene orden aleatorio
+      const exam = await prisma.exam.findUnique({
+        where: { id: examId },
+        include: { preguntas: true }
       });
 
-      res.json(attempt);
+      if (!exam) {
+        return res.status(404).json({ error: "Examen no encontrado" });
+      }
+
+      // Preparar datos del intento
+      const attemptData: any = {
+        userId,
+        examId,
+        examWindowId: examWindowId ?? null,
+        respuestas: {},
+        estado: "en_progreso"
+      };
+
+      // Si el examen tiene orden aleatorio, generar y guardar el orden randomizado
+      if (exam.ordenAleatorio && exam.preguntas && exam.preguntas.length > 0) {
+        // Crear array de IDs y randomizar usando Fisher-Yates
+        const preguntaIds = exam.preguntas.map(p => p.id);
+        for (let i = preguntaIds.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [preguntaIds[i], preguntaIds[j]] = [preguntaIds[j], preguntaIds[i]];
+        }
+        attemptData.ordenPreguntas = preguntaIds;
+      }
+
+      // Crear nuevo intento con manejo de race condition
+      try {
+        const attempt = await prisma.examAttempt.create({
+          data: attemptData
+        });
+        res.json(attempt);
+      } catch (createError: any) {
+        // Si falla por constraint único (race condition), buscar el intento existente
+        if (createError.code === 'P2002') {
+          const retryAttempt = await prisma.examAttempt.findFirst({
+            where: {
+              userId,
+              examId,
+              examWindowId: examWindowId || null
+            }
+          });
+          if (retryAttempt) {
+            return res.json(retryAttempt);
+          }
+        }
+        throw createError;
+      }
     } catch (error) {
       console.error('Error starting exam attempt:', error);
       res.status(500).json({ error: "Error iniciando intento de examen" });
@@ -175,14 +207,45 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
 
       // Agregar datos específicos según el tipo de examen
       if (attempt.exam.tipo === 'programming') {
-        updateData.codigoProgramacion = codigoProgramacion;
-        
-        // NUEVO: Evaluación automática con test cases
+        // 🔒 Obtener el archivo principal guardado manualmente
+        // Convención: main.py (Python) o main.js (JavaScript)
         const exam = await prisma.exam.findUnique({
           where: { id: attempt.examId }
         });
         
-        if (exam && exam.testCases && Array.isArray(exam.testCases) && exam.testCases.length > 0) {
+        if (!exam) {
+          return res.status(404).json({ error: "Examen no encontrado" });
+        }
+        
+        // Determinar el nombre del archivo principal según el lenguaje
+        const mainFileName = exam.lenguajeProgramacion === 'python' ? 'main.py' : 'main.js';
+        
+        // Buscar el archivo principal guardado manualmente (versión "manual")
+        const mainFile = await prisma.examFile.findFirst({
+          where: {
+            examId: attempt.examId,
+            userId: userId,
+            filename: mainFileName,
+            version: 'manual'
+          },
+          orderBy: {
+            updatedAt: 'desc' // Obtener la versión más reciente
+          }
+        });
+        
+        // Validar que existe el archivo principal (permite contenido vacío)
+        if (!mainFile) {
+          return res.status(400).json({ 
+            error: `Debes guardar el archivo principal "${mainFileName}" antes de finalizar el examen` 
+          });
+        }
+        
+        // Usar el contenido del archivo guardado manualmente (puede estar vacío)
+        const codigoParaEvaluar = mainFile.content || '';
+        updateData.codigoProgramacion = codigoParaEvaluar;
+        
+        // Evaluación automática con test cases
+        if (exam.testCases && Array.isArray(exam.testCases) && exam.testCases.length > 0) {
           const CodeExecutionService = (await import('../services/codeExecution.service.ts')).default;
           const codeExecutionService = new CodeExecutionService();
           
@@ -193,7 +256,7 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
           for (const testCase of exam.testCases as any[]) {
             try {
               const result = await codeExecutionService.executeCode(
-                codigoProgramacion,
+                codigoParaEvaluar,
                 exam.lenguajeProgramacion as 'python' | 'javascript',
                 { 
                   input: testCase.input || '',
@@ -238,7 +301,20 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
           updateData.testResults = testResults;
         }
       } else if (attempt.exam.tipo === 'multiple_choice') {
-        updateData.respuestas = respuestas || {};
+        // Guardar respuestas en la nueva tabla RespuestaEstudiante
+        if (respuestas && typeof respuestas === 'object') {
+          const respuestasArray = Object.entries(respuestas).map(([preguntaId, valor]) => ({
+            attemptId,
+            preguntaId: parseInt(preguntaId),
+            valor
+          }));
+
+          // Crear todas las respuestas en batch
+          await prisma.respuestaEstudiante.createMany({
+            data: respuestasArray,
+            skipDuplicates: true
+          });
+        }
         
         // Calcular puntaje automáticamente
         const exam = await prisma.exam.findUnique({
@@ -250,10 +326,86 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
           let correctas = 0;
           const totalPreguntas = exam.preguntas.length;
 
-          exam.preguntas.forEach((pregunta, index) => {
-            const respuestaEstudiante = respuestas?.[index];
-            if (respuestaEstudiante !== undefined && respuestaEstudiante === pregunta.correcta) {
-              correctas++;
+          // IMPORTANTE: Las respuestas ahora vienen con preguntaId como key (no índice)
+          // para soportar orden aleatorio de preguntas
+          exam.preguntas.forEach((pregunta) => {
+            const respuestaEstudiante = respuestas?.[pregunta.id];
+            
+            if (respuestaEstudiante === undefined || respuestaEstudiante === null) {
+              // No respondió
+              return;
+            }
+
+            // Evaluar según el tipo de pregunta
+            if (pregunta.tipo === 'fill_in_blank') {
+              // Para fill_in_blank, la respuesta debe ser un array con los ÍNDICES de las respuestas correctas en orden
+              if (Array.isArray(respuestaEstudiante) && Array.isArray(pregunta.opciones)) {
+                // pregunta.correcta indica cuántas respuestas correctas hay
+                // Las primeras N opciones son las correctas (en orden)
+                const numRespuestasCorrectas = pregunta.correcta || 0;
+                const respuestasCorrectasTexto = pregunta.opciones.slice(0, numRespuestasCorrectas);
+                
+                // Verificar que el estudiante seleccionó el número correcto de opciones
+                if (respuestaEstudiante.length === numRespuestasCorrectas) {
+                  // Convertir los índices del estudiante a los textos de las respuestas
+                  const respuestasEstudianteTexto = respuestaEstudiante.map((indice: number) => {
+                    // Validar que el índice está en rango
+                    if (indice >= 0 && indice < pregunta.opciones.length) {
+                      return pregunta.opciones[indice];
+                    }
+                    return null;
+                  });
+                  
+                  // Verificar que cada respuesta esté en la posición correcta comparando los textos
+                  let todasCorrectas = true;
+                  for (let i = 0; i < numRespuestasCorrectas; i++) {
+                    const estudianteTexto = String(respuestasEstudianteTexto[i] || '').trim();
+                    const correctaTexto = String(respuestasCorrectasTexto[i] || '').trim();
+                    if (estudianteTexto !== correctaTexto) {
+                      todasCorrectas = false;
+                      break;
+                    }
+                  }
+                  
+                  if (todasCorrectas) {
+                    correctas++;
+                  }
+                }
+              }
+            } else if (pregunta.tipo === 'matching') {
+              // Para matching, la respuesta es un array donde cada índice representa un concepto
+              // y el valor es el índice de la respuesta seleccionada
+              // Formato: [respuestaParaConcepto0, respuestaParaConcepto1, ...]
+              if (Array.isArray(respuestaEstudiante) && Array.isArray(pregunta.opciones)) {
+                const numConceptos = pregunta.correcta || 0;
+                
+                // Verificar que el estudiante respondió para todos los conceptos
+                if (respuestaEstudiante.length === numConceptos) {
+                  let todasCorrectas = true;
+                  
+                  // Verificar cada emparejamiento
+                  for (let i = 0; i < numConceptos; i++) {
+                    // La respuesta correcta para el concepto i es la que está en la posición (correcta + i)
+                    const indiceRespuestaCorrecta = numConceptos + i;
+                    const indiceRespuestaEstudiante = respuestaEstudiante[i];
+                    
+                    // Comparar los índices de las respuestas
+                    if (indiceRespuestaEstudiante !== indiceRespuestaCorrecta) {
+                      todasCorrectas = false;
+                      break;
+                    }
+                  }
+                  
+                  if (todasCorrectas) {
+                    correctas++;
+                  }
+                }
+              }
+            } else {
+              // Para multiple_choice y true_false, comparar índice directamente
+              if (respuestaEstudiante === pregunta.correcta) {
+                correctas++;
+              }
             }
           });
 
@@ -289,12 +441,21 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
     try {
       const examWindowId = windowId ? parseInt(windowId as string) : null;
       
+      // Construir where clause manejando null correctamente
+      const whereClause: any = {
+        userId,
+        examId
+      };
+      
+      // Solo agregar examWindowId si no es null
+      if (examWindowId !== null) {
+        whereClause.examWindowId = examWindowId;
+      } else {
+        whereClause.examWindowId = null;
+      }
+      
       const attempt = await prisma.examAttempt.findFirst({
-        where: {
-          userId,
-          examId,
-          examWindowId
-        }
+        where: whereClause
       });
 
       res.json({ hasAttempt: !!attempt, attempt });
@@ -357,7 +518,8 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
           exam: {
             include: { preguntas: true }
           },
-          examWindow: true
+          examWindow: true,
+          respuestas: true // Incluir respuestas del nuevo modelo
         }
       });
 
@@ -374,6 +536,12 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
       if (attempt.estado !== "finalizado") {
         return res.status(403).json({ error: "El intento debe estar finalizado para ver resultados" });
       }
+
+      // Convertir respuestas a formato legacy { preguntaId: valor }
+      const respuestasLegacy: any = {};
+      attempt.respuestas.forEach((resp) => {
+        respuestasLegacy[resp.preguntaId] = resp.valor;
+      });
 
       // Si es un examen de programación, incluir archivos guardados
       let examFiles: any[] = [];
@@ -399,6 +567,7 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
       // Agregar archivos al resultado
       const result = {
         ...attempt,
+        respuestas: respuestasLegacy, // Usar formato legacy para compatibilidad con frontend
         examFiles: examFiles
       };
 
@@ -406,6 +575,223 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
     } catch (error) {
       console.error('Error fetching attempt results:', error);
       res.status(500).json({ error: "Error obteniendo resultados del intento" });
+    }
+  });
+
+  // GET /exam-attempts/window/:windowId - Obtener todos los intentos de una ventana (solo profesores)
+  router.get("/window/:windowId", authenticateToken, requireRole(['professor']), async (req, res) => {
+    const windowId = parseInt(req.params.windowId);
+    const professorId = req.user!.userId;
+
+    if (isNaN(windowId)) {
+      return res.status(400).json({ error: "ID de ventana inválido" });
+    }
+
+    try {
+      // Verificar que el profesor es dueño de esta ventana
+      const examWindow = await prisma.examWindow.findUnique({
+        where: { id: windowId },
+        include: {
+          exam: {
+            select: {
+              id: true,
+              titulo: true,
+              tipo: true,
+              profesorId: true
+            }
+          }
+        }
+      });
+
+      if (!examWindow) {
+        return res.status(404).json({ error: "Ventana no encontrada" });
+      }
+
+      if (examWindow.exam.profesorId !== professorId) {
+        return res.status(403).json({ error: "No autorizado para ver estos intentos" });
+      }
+
+      // Obtener todos los intentos finalizados de esta ventana
+      const attempts = await prisma.examAttempt.findMany({
+        where: {
+          examWindowId: windowId,
+          estado: "finalizado"
+        },
+        include: {
+          user: {
+            select: {
+              id: true,
+              nombre: true,
+              email: true
+            }
+          },
+          exam: {
+            select: {
+              id: true,
+              titulo: true,
+              tipo: true,
+              lenguajeProgramacion: true
+            }
+          }
+        },
+        orderBy: [
+          { finishedAt: 'desc' }
+        ]
+      });
+
+      res.json(attempts);
+    } catch (error) {
+      console.error('Error fetching window attempts:', error);
+      res.status(500).json({ error: "Error obteniendo intentos de la ventana" });
+    }
+  });
+
+  // GET /exam-attempts/:attemptId/professor-view - Ver detalle de un intento (solo profesores)
+  router.get("/:attemptId/professor-view", authenticateToken, requireRole(['professor']), async (req, res) => {
+    const attemptId = parseInt(req.params.attemptId);
+    const professorId = req.user!.userId;
+
+    if (isNaN(attemptId)) {
+      return res.status(400).json({ error: "ID de intento inválido" });
+    }
+
+    try {
+      const attempt = await prisma.examAttempt.findUnique({
+        where: { id: attemptId },
+        include: {
+          exam: {
+            include: { 
+              preguntas: true
+            }
+          },
+          examWindow: true,
+          user: {
+            select: {
+              id: true,
+              nombre: true,
+              email: true
+            }
+          }
+        }
+      });
+
+      if (!attempt) {
+        return res.status(404).json({ error: "Intento no encontrado" });
+      }
+
+      // Verificar que el profesor es dueño del examen
+      if (attempt.exam.profesorId !== professorId) {
+        return res.status(403).json({ error: "No autorizado para ver este intento" });
+      }
+
+      // Si es un examen de programación, incluir archivos guardados (ambas versiones)
+      let manualFiles: any[] = [];
+      let submissionFiles: any[] = [];
+      
+      if (attempt.exam.tipo === 'programming') {
+        manualFiles = await prisma.examFile.findMany({
+          where: {
+            examId: attempt.examId,
+            userId: attempt.userId,
+            version: 'manual'
+          },
+          select: {
+            id: true,
+            filename: true,
+            content: true,
+            version: true,
+            createdAt: true,
+            updatedAt: true
+          },
+          orderBy: {
+            filename: 'asc'
+          }
+        });
+
+        submissionFiles = await prisma.examFile.findMany({
+          where: {
+            examId: attempt.examId,
+            userId: attempt.userId,
+            version: 'submission'
+          },
+          select: {
+            id: true,
+            filename: true,
+            content: true,
+            version: true,
+            createdAt: true,
+            updatedAt: true
+          },
+          orderBy: {
+            filename: 'asc'
+          }
+        });
+      }
+
+      // Agregar archivos al resultado
+      const result = {
+        ...attempt,
+        manualFiles,
+        submissionFiles
+      };
+
+      res.json(result);
+    } catch (error) {
+      console.error('Error fetching attempt for professor:', error);
+      res.status(500).json({ error: "Error obteniendo intento" });
+    }
+  });
+
+  // PUT /exam-attempts/:attemptId/manual-grade - Asignar calificación manual (solo profesores)
+  router.put("/:attemptId/manual-grade", authenticateToken, requireRole(['professor']), async (req, res) => {
+    const attemptId = parseInt(req.params.attemptId);
+    const professorId = req.user!.userId;
+    const { calificacionManual, comentariosCorreccion } = req.body;
+
+    if (isNaN(attemptId)) {
+      return res.status(400).json({ error: "ID de intento inválido" });
+    }
+
+    if (calificacionManual === undefined || calificacionManual === null) {
+      return res.status(400).json({ error: "Calificación manual requerida" });
+    }
+
+    try {
+      // Verificar que el intento existe y el profesor es dueño del examen
+      const attempt = await prisma.examAttempt.findUnique({
+        where: { id: attemptId },
+        include: {
+          exam: {
+            select: {
+              profesorId: true
+            }
+          }
+        }
+      });
+
+      if (!attempt) {
+        return res.status(404).json({ error: "Intento no encontrado" });
+      }
+
+      if (attempt.exam.profesorId !== professorId) {
+        return res.status(403).json({ error: "No autorizado para calificar este intento" });
+      }
+
+      // Actualizar calificación manual
+      const updatedAttempt = await prisma.examAttempt.update({
+        where: { id: attemptId },
+        data: {
+          calificacionManual: parseFloat(calificacionManual),
+          comentariosCorreccion: comentariosCorreccion || null,
+          corregidoPor: professorId,
+          corregidoAt: new Date()
+        }
+      });
+
+      res.json(updatedAttempt);
+    } catch (error) {
+      console.error('Error updating manual grade:', error);
+      res.status(500).json({ error: "Error actualizando calificación manual" });
     }
   });
 

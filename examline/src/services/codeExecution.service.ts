@@ -436,6 +436,80 @@ rl.on('close', () => {
   }
 
   /**
+   * Ejecuta tests contra código dado
+   * Usado por el profesor para validar tests antes de publicar
+   */
+  async runTests(
+    code: string,
+    language: 'python' | 'javascript',
+    testCases: Array<{ description: string; input: string; expectedOutput: string }>,
+    options: ExecutionOptions = {}
+  ): Promise<{
+    testResults: Array<{
+      description: string;
+      passed: boolean;
+      input: string;
+      expectedOutput: string;
+      actualOutput: string;
+      error: string | null;
+      executionTime: number;
+    }>;
+    totalTests: number;
+    passedTests: number;
+    score: number;
+  }> {
+    const testResults = [];
+    let passedTests = 0;
+
+    for (const testCase of testCases) {
+      try {
+        const result = await this.executeCode(code, language, {
+          ...options,
+          input: testCase.input
+        });
+
+        const actualOutput = result.output.trim();
+        const expectedOutput = testCase.expectedOutput.trim();
+        const passed = actualOutput === expectedOutput && result.exitCode === 0 && !result.error;
+
+        if (passed) {
+          passedTests++;
+        }
+
+        testResults.push({
+          description: testCase.description,
+          passed,
+          input: testCase.input,
+          expectedOutput,
+          actualOutput,
+          error: result.error,
+          executionTime: result.executionTime
+        });
+      } catch (error: any) {
+        testResults.push({
+          description: testCase.description,
+          passed: false,
+          input: testCase.input,
+          expectedOutput: testCase.expectedOutput,
+          actualOutput: '',
+          error: error.message,
+          executionTime: 0
+        });
+      }
+    }
+
+    const totalTests = testCases.length;
+    const score = totalTests > 0 ? (passedTests / totalTests) * 100 : 0;
+
+    return {
+      testResults,
+      totalTests,
+      passedTests,
+      score
+    };
+  }
+
+  /**
    * Método futuro para ejecutar código en Docker
    * Descomentar cuando se implemente Docker
    */
