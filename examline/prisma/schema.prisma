@@ -30,6 +30,7 @@ model Exam {
   lenguajeProgramacion  String?       // "python" | "javascript" (solo para exámenes de programación)
   intellisenseHabilitado Boolean      @default(false) // solo para exámenes de programación
   enunciadoProgramacion String?       // enunciado específico para exámenes de programación
+  enunciadoUrl          String?       // link a un documento externo (ej. Google Docs publicado) con la consigna
   codigoInicial         String?       // código inicial/template para exámenes de programación
   testCases             Json?         // casos de prueba para evaluación automática de exámenes de programación
   solucionReferencia    String?       // solución de referencia del profesor (solo visible para él)

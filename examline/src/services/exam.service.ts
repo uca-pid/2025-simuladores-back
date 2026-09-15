@@ -29,6 +29,7 @@ export async function createExam(
     lenguajeProgramacion,
     intellisenseHabilitado = false,
     enunciadoProgramacion,
+    enunciadoUrl,
     codigoInicial,
     testCases,
     solucionReferencia,
@@ -76,6 +77,7 @@ export async function createExam(
     examData.lenguajeProgramacion = lenguajeProgramacion;
     examData.intellisenseHabilitado = intellisenseHabilitado;
     examData.enunciadoProgramacion = enunciadoProgramacion;
+    examData.enunciadoUrl = enunciadoUrl || null;
     examData.codigoInicial = codigoInicial || '';
     examData.testCases = testCases || [];
     examData.solucionReferencia = solucionReferencia || null;
