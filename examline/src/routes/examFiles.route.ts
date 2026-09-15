@@ -1,6 +1,20 @@
 import { type PrismaClient } from '@prisma/client';
 import { Router } from 'express';
 import { authenticateToken, requireRole } from '../middleware/auth';
+import {
+  validateExamOwnership,
+  getStudentFiles,
+  validateStudentInscription,
+  getFiles,
+  getFile,
+  saveFile,
+  deleteFile,
+  saveSubmissionFiles,
+  validateExamOwnerForReferenceSolution,
+  getReferenceSolutionFiles,
+  saveReferenceSolutionFiles,
+  deleteReferenceSolutionFile
+} from '../services/examFiles.service';
 
 const ExamFilesRoute = (prisma: PrismaClient) => {
   const router = Router();
@@ -13,48 +27,14 @@ const ExamFilesRoute = (prisma: PrismaClient) => {
       const version = req.query.version || 'submission'; // Por defecto, ver versión de envío
 
       // ✅ Verificar que el examen pertenece al profesor
-      const exam = await prisma.exam.findUnique({
-        where: { id: parseInt(examId) },
-        select: { profesorId: true }
-      });
-
-      if (!exam) {
-        return res.status(404).json({ error: 'Examen no encontrado' });
-      }
-
-      if (exam.profesorId !== profesorId) {
-        return res.status(403).json({ 
-          error: 'No tienes permisos para ver archivos de este examen',
-          code: 'NOT_OWNER'
-        });
+      const ownership = await validateExamOwnership(prisma, parseInt(examId), profesorId);
+      if (ownership.error) {
+        const { status, error: message, code } = ownership.error as any;
+        return res.status(status).json(code ? { error: message, code } : { error: message });
       }
 
       // Obtener archivos del estudiante
-      const files = await prisma.examFile.findMany({
-        where: {
-          examId: parseInt(examId),
-          userId: parseInt(studentId),
-          version: version as string
-        },
-        select: {
-          id: true,
-          filename: true,
-          content: true,
-          version: true,
-          createdAt: true,
-          updatedAt: true,
-          user: {
-            select: {
-              id: true,
-              nombre: true,
-              email: true
-            }
-          }
-        },
-        orderBy: {
-          updatedAt: 'desc'
-        }
-      });
+      const files = await getStudentFiles(prisma, parseInt(examId), parseInt(studentId), version as string);
 
       res.json(files);
     } catch (error) {
@@ -72,42 +52,12 @@ router.get('/:examId/files', authenticateToken, async (req, res) => {
     const version = req.query.version || 'manual'; // Obtener versión del query param
 
     // 🔒 Validación de seguridad: verificar que el estudiante esté inscrito en una ventana activa de este examen
-    if (userRole === 'student') {
-      const inscription = await prisma.inscription.findFirst({
-        where: {
-          userId: userId,
-          examWindow: {
-            examId: parseInt(examId),
-            activa: true
-          },
-          cancelledAt: null
-        },
-        include: { examWindow: true }
-      });
-
-      if (!inscription) {
-        return res.status(403).json({ error: 'No estás inscrito en una ventana activa de este examen' });
-      }
+    const validationError = await validateStudentInscription(prisma, userId, userRole, parseInt(examId));
+    if (validationError) {
+      return res.status(validationError.status).json({ error: validationError.error });
     }
 
-    const files = await prisma.examFile.findMany({
-      where: {
-        examId: parseInt(examId),
-        userId: userId,
-        version: version as string
-      },
-      select: {
-        id: true,
-        filename: true,
-        content: true,
-        version: true,
-        createdAt: true,
-        updatedAt: true
-      },
-      orderBy: {
-        updatedAt: 'desc'
-      }
-    });
+    const files = await getFiles(prisma, parseInt(examId), userId, version as string);
 
     res.json(files);
   } catch (error) {
@@ -125,31 +75,12 @@ router.get('/:examId/files/:filename', authenticateToken, async (req, res) => {
     const version = req.query.version || 'manual'; // Obtener versión del query param
 
     // 🔒 Validación de seguridad: verificar que el estudiante esté inscrito
-    if (userRole === 'student') {
-      const inscription = await prisma.inscription.findFirst({
-        where: {
-          userId: userId,
-          examWindow: {
-            examId: parseInt(examId),
-            activa: true
-          },
-          cancelledAt: null
-        }
-      });
-
-      if (!inscription) {
-        return res.status(403).json({ error: 'No estás inscrito en una ventana activa de este examen' });
-      }
+    const validationError = await validateStudentInscription(prisma, userId, userRole, parseInt(examId));
+    if (validationError) {
+      return res.status(validationError.status).json({ error: validationError.error });
     }
 
-    const file = await prisma.examFile.findFirst({
-      where: {
-        examId: parseInt(examId),
-        userId: userId,
-        filename: filename,
-        version: version as string
-      }
-    });
+    const file = await getFile(prisma, parseInt(examId), userId, filename, version as string);
 
     if (!file) {
       return res.status(404).json({ error: 'Archivo no encontrado' });
@@ -175,46 +106,14 @@ router.post('/:examId/files', authenticateToken, async (req, res) => {
     }
 
     // 🔒 Validación de seguridad: verificar que el estudiante esté inscrito
-    if (userRole === 'student') {
-      const inscription = await prisma.inscription.findFirst({
-        where: {
-          userId: userId,
-          examWindow: {
-            examId: parseInt(examId),
-            activa: true
-          },
-          cancelledAt: null
-        }
-      });
-
-      if (!inscription) {
-        return res.status(403).json({ error: 'No estás inscrito en una ventana activa de este examen' });
-      }
+    const validationError = await validateStudentInscription(prisma, userId, userRole, parseInt(examId));
+    if (validationError) {
+      return res.status(validationError.status).json({ error: validationError.error });
     }
 
     // Usar upsert para crear o actualizar en una sola operación
     // Esto evita problemas de condición de carrera
-    const file = await prisma.examFile.upsert({
-      where: {
-        examId_userId_filename_version: {
-          examId: parseInt(examId),
-          userId: userId,
-          filename: filename,
-          version: version
-        }
-      },
-      update: {
-        content: content || '',
-        updatedAt: new Date()
-      },
-      create: {
-        examId: parseInt(examId),
-        userId: userId,
-        filename: filename,
-        content: content || '',
-        version: version
-      }
-    });
+    const file = await saveFile(prisma, parseInt(examId), userId, filename, content, version);
 
     res.json(file);
   } catch (error) {
@@ -232,39 +131,16 @@ router.delete('/:examId/files/:filename', authenticateToken, async (req, res) =>
     const version = req.query.version || 'manual'; // Obtener versión del query param
 
     // 🔒 Validación de seguridad: verificar que el estudiante esté inscrito
-    if (userRole === 'student') {
-      const inscription = await prisma.inscription.findFirst({
-        where: {
-          userId: userId,
-          examWindow: {
-            examId: parseInt(examId),
-            activa: true
-          },
-          cancelledAt: null
-        }
-      });
-
-      if (!inscription) {
-        return res.status(403).json({ error: 'No estás inscrito en una ventana activa de este examen' });
-      }
+    const validationError = await validateStudentInscription(prisma, userId, userRole, parseInt(examId));
+    if (validationError) {
+      return res.status(validationError.status).json({ error: validationError.error });
     }
 
-    const file = await prisma.examFile.findFirst({
-      where: {
-        examId: parseInt(examId),
-        userId: userId,
-        filename: filename,
-        version: version as string
-      }
-    });
+    const file = await deleteFile(prisma, parseInt(examId), userId, filename, version as string);
 
     if (!file) {
       return res.status(404).json({ error: 'Archivo no encontrado' });
     }
-
-    await prisma.examFile.delete({
-      where: { id: file.id }
-    });
 
     res.json({ message: 'Archivo eliminado correctamente' });
   } catch (error) {
@@ -286,68 +162,17 @@ router.post('/:examId/files/submission', authenticateToken, async (req, res) => 
     }
 
     // 🔒 Validación de seguridad: verificar que el estudiante esté inscrito
-    if (userRole === 'student') {
-      const inscription = await prisma.inscription.findFirst({
-        where: {
-          userId: userId,
-          examWindow: {
-            examId: parseInt(examId),
-            activa: true
-          },
-          cancelledAt: null
-        }
-      });
-
-      if (!inscription) {
-        return res.status(403).json({ error: 'No estás inscrito en una ventana activa de este examen' });
-      }
+    const validationError = await validateStudentInscription(prisma, userId, userRole, parseInt(examId));
+    if (validationError) {
+      return res.status(validationError.status).json({ error: validationError.error });
     }
 
     // Crear/actualizar todos los archivos con versión "submission"
-    const savedFiles = [];
-    for (const fileData of files) {
-      const { filename, content } = fileData;
-      
-      if (!filename) {
-        continue; // Saltar archivos sin nombre
-      }
+    const savedFiles = await saveSubmissionFiles(prisma, parseInt(examId), userId, files);
 
-      // Verificar si ya existe el archivo con versión submission
-      const existingFile = await prisma.examFile.findFirst({
-        where: {
-          examId: parseInt(examId),
-          userId: userId,
-          filename: filename,
-          version: 'submission'
-        }
-      });
-
-      let file;
-      if (existingFile) {
-        // Actualizar archivo existente
-        file = await prisma.examFile.update({
-          where: { id: existingFile.id },
-          data: { content: content || '' }
-        });
-      } else {
-        // Crear nuevo archivo
-        file = await prisma.examFile.create({
-          data: {
-            examId: parseInt(examId),
-            userId: userId,
-            filename: filename,
-            content: content || '',
-            version: 'submission'
-          }
-        });
-      }
-
-      savedFiles.push(file);
-    }
-
-    res.json({ 
+    res.json({
       message: 'Archivos guardados como versión de envío',
-      files: savedFiles 
+      files: savedFiles
     });
   } catch (error) {
     console.error('Error saving submission files:', error);
@@ -364,36 +189,12 @@ router.get('/:examId/reference-solution', authenticateToken, async (req, res) =>
     const userId = req.user!.userId;
 
     // Verificar que el examen existe y el usuario es el profesor
-    const exam = await prisma.exam.findUnique({
-      where: { id: parseInt(examId) }
-    });
-
-    if (!exam) {
-      return res.status(404).json({ error: 'Examen no encontrado' });
+    const ownership = await validateExamOwnerForReferenceSolution(prisma, parseInt(examId), userId, 'ver');
+    if (ownership.error) {
+      return res.status(ownership.error.status).json({ error: ownership.error.error });
     }
 
-    if (exam.profesorId !== userId) {
-      return res.status(403).json({ error: 'No tienes permiso para ver la solución de referencia' });
-    }
-
-    const files = await prisma.examFile.findMany({
-      where: {
-        examId: parseInt(examId),
-        userId: exam.profesorId,
-        version: 'reference_solution'
-      },
-      select: {
-        id: true,
-        filename: true,
-        content: true,
-        version: true,
-        createdAt: true,
-        updatedAt: true
-      },
-      orderBy: {
-        filename: 'asc'
-      }
-    });
+    const files = await getReferenceSolutionFiles(prisma, parseInt(examId), ownership.exam!.profesorId);
 
     res.json(files);
   } catch (error) {
@@ -410,17 +211,12 @@ router.post('/:examId/reference-solution', authenticateToken, async (req, res) =
     const userId = req.user!.userId;
 
     // Verificar que el examen existe y el usuario es el profesor
-    const exam = await prisma.exam.findUnique({
-      where: { id: parseInt(examId) }
-    });
-
-    if (!exam) {
-      return res.status(404).json({ error: 'Examen no encontrado' });
+    const ownership = await validateExamOwnerForReferenceSolution(prisma, parseInt(examId), userId, 'modificar');
+    if (ownership.error) {
+      return res.status(ownership.error.status).json({ error: ownership.error.error });
     }
 
-    if (exam.profesorId !== userId) {
-      return res.status(403).json({ error: 'No tienes permiso para modificar la solución de referencia' });
-    }
+    const exam = ownership.exam!;
 
     if (exam.tipo !== 'programming') {
       return res.status(400).json({ error: 'Solo los exámenes de programación pueden tener solución de referencia' });
@@ -431,42 +227,11 @@ router.post('/:examId/reference-solution', authenticateToken, async (req, res) =
     }
 
     // Crear/actualizar todos los archivos con versión "reference_solution"
-    const savedFiles = [];
-    for (const fileData of files) {
-      const { filename, content } = fileData;
-      
-      if (!filename) {
-        continue;
-      }
+    const savedFiles = await saveReferenceSolutionFiles(prisma, parseInt(examId), exam.profesorId, files);
 
-      const file = await prisma.examFile.upsert({
-        where: {
-          examId_userId_filename_version: {
-            examId: parseInt(examId),
-            userId: exam.profesorId,
-            filename: filename,
-            version: 'reference_solution'
-          }
-        },
-        update: {
-          content: content || '',
-          updatedAt: new Date()
-        },
-        create: {
-          examId: parseInt(examId),
-          userId: exam.profesorId,
-          filename: filename,
-          content: content || '',
-          version: 'reference_solution'
-        }
-      });
-
-      savedFiles.push(file);
-    }
-
-    res.json({ 
+    res.json({
       message: 'Archivos de solución de referencia guardados correctamente',
-      files: savedFiles 
+      files: savedFiles
     });
   } catch (error) {
     console.error('Error saving reference solution files:', error);
@@ -481,34 +246,16 @@ router.delete('/:examId/reference-solution/:filename', authenticateToken, async 
     const userId = req.user!.userId;
 
     // Verificar que el examen existe y el usuario es el profesor
-    const exam = await prisma.exam.findUnique({
-      where: { id: parseInt(examId) }
-    });
-
-    if (!exam) {
-      return res.status(404).json({ error: 'Examen no encontrado' });
+    const ownership = await validateExamOwnerForReferenceSolution(prisma, parseInt(examId), userId, 'eliminar');
+    if (ownership.error) {
+      return res.status(ownership.error.status).json({ error: ownership.error.error });
     }
 
-    if (exam.profesorId !== userId) {
-      return res.status(403).json({ error: 'No tienes permiso para eliminar archivos de referencia' });
-    }
-
-    const file = await prisma.examFile.findFirst({
-      where: {
-        examId: parseInt(examId),
-        userId: exam.profesorId,
-        filename: filename,
-        version: 'reference_solution'
-      }
-    });
+    const file = await deleteReferenceSolutionFile(prisma, parseInt(examId), ownership.exam!.profesorId, filename);
 
     if (!file) {
       return res.status(404).json({ error: 'Archivo no encontrado' });
     }
-
-    await prisma.examFile.delete({
-      where: { id: file.id }
-    });
 
     res.json({ message: 'Archivo de referencia eliminado correctamente' });
   } catch (error) {
