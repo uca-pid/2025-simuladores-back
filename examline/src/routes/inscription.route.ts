@@ -297,7 +297,15 @@ const InscriptionRoute = (prisma: PrismaClient) => {
         },
         include: {
           user: {
-            select: { id: true, nombre: true, email: true }
+            select: { 
+              id: true, 
+              nombre: true, 
+              email: true,
+              intentos: {
+                where: { examWindowId: windowId },
+                include: { extensionesTiempo: true }
+              }
+            }
           }
         },
         orderBy: {

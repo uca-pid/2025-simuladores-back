@@ -12,13 +12,15 @@ import {
 
 const ExamStartRoute = (prisma: PrismaClient) => {
   const router = Router()
-  const FRONTEND_URL1 = process.env.FRONTEND_URL || "http://localhost:3000"
-  const BACKEND_URL = process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 4000}`
 
   // Ruta para descargar el .seb dinámico
   router.get("/download/:examId/:windowId/:token", async (req: Request, res: Response) => {
     const { examId, windowId, token } = req.params
     const contra = "12345" // contraseña para quit/admin
+
+    // Obtener URLs desde variables de entorno o valores por defecto
+    const frontendBaseUrl = (process.env.FRONTEND_URL || "http://localhost:3000").replace(/\/$/, "")
+    const backendBaseUrl = (process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 4000}`).replace(/\/$/, "")
 
     // Validar que el examen exista en la base de datos
     const exam = await prisma.exam.findUnique({
@@ -39,7 +41,7 @@ const ExamStartRoute = (prisma: PrismaClient) => {
       return res.status(500).json({ error: "Error al obtener configuración de SEB" })
     }
 
-    const frontUrl = `${FRONTEND_URL1}/exam-attempt/${examId}?windowId=${windowId}&token=${token}`;
+    const frontUrl = `${frontendBaseUrl}/exam-attempt/${examId}?windowId=${windowId}&token=${token}`;
 
     // Construir parámetros para el builder
     const params: SEBConfigParams = {
@@ -47,7 +49,7 @@ const ExamStartRoute = (prisma: PrismaClient) => {
       windowId: Number(windowId),
       token,
       frontUrl,
-      backendUrl: BACKEND_URL,
+      backendUrl: backendBaseUrl,
       quitPassword: contra,
       settingsPassword: contra,
     }
@@ -56,17 +58,17 @@ const ExamStartRoute = (prisma: PrismaClient) => {
     const sebPlist = buildSEBXml(params, sebSettings)
 
     // Carpeta donde se guardarán los .seb
-  const examsFolder = path.join(process.cwd(), "examenes");
-  if (!fs.existsSync(examsFolder)) fs.mkdirSync(examsFolder);
-   const fileName = `examen_${examId}.seb`;
+    const examsFolder = path.join(process.cwd(), "examenes");
+    if (!fs.existsSync(examsFolder)) fs.mkdirSync(examsFolder);
+    const fileName = `examen_${examId}.seb`;
     const filePath = path.join(examsFolder, fileName);
 
     // Guardar el .seb en la carpeta
     fs.writeFileSync(filePath, sebPlist, "utf8");
 
     // Devolver la URL para que el frontend la abra
-    // Construir la URL usando la configuración del backend hosteado
-    const backendHost = BACKEND_URL.replace('http://', '').replace('https://', '');
+    // Construir la URL usando el host del backend (removiendo http:// o https://)
+    const backendHost = backendBaseUrl.replace(/^https?:\/\//, '');
     const sebUrl = `seb://${backendHost}/examenes/${fileName}`;
     res.json({ sebUrl });
     

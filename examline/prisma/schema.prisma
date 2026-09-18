@@ -19,6 +19,7 @@ model User {
   inscripciones Inscription[]
   examFiles     ExamFile[]
   questionBank  QuestionBank[]
+  extensionesOtorgadas ExamTimeExtension[]
 }
 
 model Exam {
@@ -137,6 +138,7 @@ model ExamWindow {
   lastMoodleSync DateTime?    // Última vez que se sincronizó con Moodle
   exam          Exam          @relation(fields: [examId], references: [id])
   inscripciones Inscription[]
+  extensionesTiempo ExamTimeExtension[]
 }
 
 model Inscription {
@@ -171,9 +173,11 @@ model ExamAttempt {
   exam         Exam        @relation(fields: [examId], references: [id])
   user         User        @relation(fields: [userId], references: [id])
   respuestas   RespuestaEstudiante[] // Respuestas del estudiante a cada pregunta
+  extensionesTiempo ExamTimeExtension[]
 
   @@unique([userId, examId, examWindowId])
 }
+
 
 model RespuestaEstudiante {
   id         Int         @id @default(autoincrement())
@@ -221,4 +225,21 @@ model QuestionBank {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   profesor  User     @relation(fields: [profesorId], references: [id])
+}
+
+model ExamTimeExtension {
+  id           Int          @id @default(autoincrement())
+  examWindowId Int
+  attemptId    Int?         // NULL = aplica a TODOS los estudiantes de esta ventana
+  minutos      Int          // Ej: 10, 15 (minutos agregados)
+  motivo       String?      // Ej: "Corte de luz general", "Prórroga por retraso"
+  otorgadoPor  Int          // ID del profesor que otorgó el tiempo
+  createdAt    DateTime     @default(now())
+
+  examWindow   ExamWindow   @relation(fields: [examWindowId], references: [id], onDelete: Cascade)
+  attempt      ExamAttempt? @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  profesor     User         @relation(fields: [otorgadoPor], references: [id])
+
+  @@index([examWindowId])
+  @@index([attemptId])
 }

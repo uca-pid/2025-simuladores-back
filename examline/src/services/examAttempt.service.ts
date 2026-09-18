@@ -45,10 +45,26 @@ export async function validateAttemptStart(
     // Para ventanas con tiempo, verificar tiempo y estado
     const now = new Date();
     const startDate = new Date(inscription.examWindow.fechaInicio!);
-    const endDate = new Date(startDate.getTime() + (inscription.examWindow.duracion! * 60 * 1000));
+
+    // Obtener extensiones de tiempo usando el nuevo servicio
+    const { ExamTimeExtensionService } = await import('./examTimeExtension.service.ts');
+    const timeExtensionService = new ExamTimeExtensionService(prisma);
+
+    // Buscar si ya existe un intento para incluir prórrogas individuales
+    const existingAttempt = await prisma.examAttempt.findFirst({
+      where: { userId, examWindowId }
+    });
+
+    const extraMinutes = await timeExtensionService.getTotalExtraMinutes(
+      examWindowId, 
+      existingAttempt?.id
+    );
+
+    const duracionTotal = inscription.examWindow.duracion! + extraMinutes;
+    const endDate = new Date(startDate.getTime() + (duracionTotal * 60 * 1000));
 
     if (inscription.examWindow.estado !== 'en_curso' || now < startDate || now > endDate) {
-      return { status: 403, error: "El examen no está disponible" };
+      return { status: 403, error: "El examen no está disponible o tu tiempo ha expirado" };
     }
   }
 

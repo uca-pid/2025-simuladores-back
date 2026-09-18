@@ -472,6 +472,50 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
     }
   });
 
+  // POST /:attemptId/extend-time - Agregar tiempo extra a un intento individual
+  router.post('/:attemptId/extend-time', authenticateToken, requireRole(['professor']), async (req, res) => {
+    const attemptId = parseInt(req.params.attemptId);
+    const professorId = req.user!.userId;
+    const rawMinutos = req.body.minutos !== undefined ? req.body.minutos : req.body.minutosExtras;
+    const minutos = typeof rawMinutos === 'number' ? rawMinutos : parseInt(rawMinutos, 10);
+    const motivo = req.body.motivo;
+
+    if (isNaN(attemptId) || isNaN(minutos) || minutos <= 0) {
+      return res.status(400).json({ error: "Parámetros inválidos. Se requieren minutos mayores a 0." });
+    }
+
+    try {
+      const attempt = await prisma.examAttempt.findUnique({
+        where: { id: attemptId },
+        include: { exam: { select: { profesorId: true } } }
+      });
+
+      if (!attempt || !attempt.examWindowId) {
+        return res.status(404).json({ error: "Intento no encontrado o no pertenece a una ventana" });
+      }
+
+      if (attempt.exam.profesorId !== professorId) {
+        return res.status(403).json({ error: "No autorizado" });
+      }
+
+      const { ExamTimeExtensionService } = await import('../services/examTimeExtension.service.ts');
+      const timeExtensionService = new ExamTimeExtensionService(prisma);
+      
+      const extension = await timeExtensionService.grantIndividualExtension({
+        examWindowId: attempt.examWindowId,
+        attemptId: attemptId,
+        minutos,
+        otorgadoPor: professorId,
+        motivo
+      });
+
+      res.json({ message: "Tiempo extendido correctamente para el estudiante", extension });
+    } catch (error) {
+      console.error('Error extendiendo tiempo individual:', error);
+      res.status(500).json({ error: 'Error interno del servidor' });
+    }
+  });
+
   return router;
 };
 

@@ -7,6 +7,7 @@ import {
   updateWindowStatuses,
   startMillisecondSystem,
 } from "../services/examWindow.service.ts";
+import { ExamTimeExtensionService } from "../services/examTimeExtension.service.ts";
 
 const ExamWindowRoute = (prisma: PrismaClient) => {
   const router = Router();
@@ -584,6 +585,72 @@ router.get('/disponibles', authenticateToken, requireRole(['student']), async (r
       });
     } catch (error) {
       console.error('Error actualizando publicación de notas:', error);
+      res.status(500).json({ error: 'Error interno del servidor' });
+    }
+  });
+
+  // POST /:id/extend-time-all - Agregar tiempo extra a todos los alumnos de una ventana
+  router.post('/:id/extend-time-all', authenticateToken, requireRole(['professor']), async (req, res) => {
+    const windowId = parseInt(req.params.id);
+    const professorId = req.user!.userId;
+    const rawMinutos = req.body.minutos !== undefined ? req.body.minutos : req.body.minutosExtras;
+    const minutos = typeof rawMinutos === 'number' ? rawMinutos : parseInt(rawMinutos, 10);
+    const motivo = req.body.motivo;
+
+    if (isNaN(windowId) || isNaN(minutos) || minutos <= 0) {
+      return res.status(400).json({ error: "Parámetros inválidos. Se requieren minutos mayores a 0." });
+    }
+
+    try {
+      const examWindow = await prisma.examWindow.findUnique({
+        where: { id: windowId },
+        include: { exam: { select: { profesorId: true } } }
+      });
+
+      if (!examWindow || examWindow.exam.profesorId !== professorId) {
+        return res.status(403).json({ error: "No autorizado" });
+      }
+
+      const timeExtensionService = new ExamTimeExtensionService(prisma);
+      const extension = await timeExtensionService.grantGlobalExtension({
+        examWindowId: windowId,
+        minutos,
+        otorgadoPor: professorId,
+        motivo
+      });
+
+      res.json({ message: "Tiempo extendido correctamente para toda la ventana", extension });
+    } catch (error) {
+      console.error('Error extendiendo tiempo global:', error);
+      res.status(500).json({ error: 'Error interno del servidor' });
+    }
+  });
+
+  // GET /:id/audit-time-extensions - Historial de prórrogas
+  router.get('/:id/audit-time-extensions', authenticateToken, requireRole(['professor']), async (req, res) => {
+    const windowId = parseInt(req.params.id);
+    const professorId = req.user!.userId;
+
+    if (isNaN(windowId)) {
+      return res.status(400).json({ error: "ID de ventana inválido" });
+    }
+
+    try {
+      const examWindow = await prisma.examWindow.findUnique({
+        where: { id: windowId },
+        include: { exam: { select: { profesorId: true } } }
+      });
+
+      if (!examWindow || examWindow.exam.profesorId !== professorId) {
+        return res.status(403).json({ error: "No autorizado" });
+      }
+
+      const timeExtensionService = new ExamTimeExtensionService(prisma);
+      const auditLog = await timeExtensionService.getAuditHistory(windowId);
+
+      res.json(auditLog);
+    } catch (error) {
+      console.error('Error obteniendo historial de extensiones:', error);
       res.status(500).json({ error: 'Error interno del servidor' });
     }
   });

@@ -131,7 +131,7 @@ export async function getExamWindowSEBSettings(
     allowUploads: (examWindow as any).sebAllowUploads ?? false,
     
     // URLs y contraseñas
-    quitUrl: (examWindow as any).sebQuitUrl ?? "https://ferocarcineto.com.ar/",
+    quitUrl: "http://quit.seb/",
     quitPassword: (examWindow as any).sebQuitPassword ?? "12345",
     settingsPassword: (examWindow as any).sebSettingsPassword ?? "12345",
   };
@@ -177,6 +177,8 @@ export function buildSEBXml(
     <${settings.allowQuit ? "true" : "false"} />
     <key>browserViewMode</key>
     <integer>${settings.browserViewMode}</integer>
+    <key>quitURL</key>
+    <string>${quitUrl}</string>
     <key>quitURLConfirm</key>
     <false />
     <key>hashedAdminPassword</key>
