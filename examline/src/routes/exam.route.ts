@@ -1,5 +1,8 @@
 import { type PrismaClient } from "@prisma/client";
 import { Router } from "express";
+import multer from "multer";
+import path from "path";
+import fs from "fs";
 import { authenticateToken, requireRole, requireOwnership } from "../middleware/auth.ts";
 import CodeExecutionService from "../services/codeExecution.service.ts";
 import {
@@ -11,9 +14,62 @@ import {
   saveReferenceSolution
 } from "../services/exam.service.ts";
 
+const UPLOADS_DIR = path.join(process.cwd(), "uploads", "enunciados");
+fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+
+const ALLOWED_MIME_TYPES: Record<string, string> = {
+  "application/pdf": ".pdf",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx"
+};
+
+const enunciadoUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, UPLOADS_DIR),
+    filename: (_req, file, cb) => {
+      const ext = ALLOWED_MIME_TYPES[file.mimetype];
+      cb(null, `${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`);
+    }
+  }),
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+  fileFilter: (_req, file, cb) => {
+    if (ALLOWED_MIME_TYPES[file.mimetype]) {
+      cb(null, true);
+    } else {
+      cb(new Error("Solo se permiten archivos PDF o DOCX"));
+    }
+  }
+});
+
 const ExamRoute = (prisma: PrismaClient) => {
   const router = Router();
   const codeExecutionService = new CodeExecutionService();
+
+  // POST /exams/upload-enunciado (protected - professors only)
+  // Sube un archivo PDF/DOCX con la consigna de un examen de programación
+  router.post(
+    "/upload-enunciado",
+    authenticateToken,
+    requireRole(['professor']),
+    (req, res) => {
+      enunciadoUpload.single("archivo")(req, res, (err: any) => {
+        if (err) {
+          const message = err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE'
+            ? "El archivo supera el tamaño máximo permitido (10MB)"
+            : err.message || "Error al subir el archivo";
+          return res.status(400).json({ error: message });
+        }
+
+        if (!req.file) {
+          return res.status(400).json({ error: "Debe adjuntar un archivo" });
+        }
+
+        res.status(201).json({
+          url: `/uploads/enunciados/${req.file.filename}`,
+          nombre: req.file.originalname
+        });
+      });
+    }
+  );
 
   // POST /exams/create (protected - professors only)
   router.post("/create", authenticateToken, requireRole(['professor']), async (req, res) => {

@@ -29,8 +29,10 @@ model Exam {
   ordenAleatorio        Boolean       @default(false) // si las preguntas deben aparecer en orden aleatorio para cada estudiante
   lenguajeProgramacion  String?       // "python" | "javascript" (solo para exámenes de programación)
   intellisenseHabilitado Boolean      @default(false) // solo para exámenes de programación
-  enunciadoProgramacion String?       // enunciado específico para exámenes de programación
-  enunciadoUrl          String?       // link a un documento externo (ej. Google Docs publicado) con la consigna
+  enunciadoTipo         String        @default("texto") // "texto" | "archivo" (mutuamente excluyentes)
+  enunciadoProgramacion String?       // enunciado en texto (solo si enunciadoTipo = "texto")
+  enunciadoUrl          String?       // ruta al archivo PDF/DOCX de consigna subido (solo si enunciadoTipo = "archivo")
+  enunciadoArchivoNombre String?      // nombre original del archivo subido, para mostrar en la UI
   codigoInicial         String?       // código inicial/template para exámenes de programación
   testCases             Json?         // casos de prueba para evaluación automática de exámenes de programación
   solucionReferencia    String?       // solución de referencia del profesor (solo visible para él)

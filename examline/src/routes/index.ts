@@ -31,6 +31,7 @@ const addRoutes = (app: Express, prisma: PrismaClient) => {
     app.use('/moodle', MoodleRoute(prisma))
     app.use('/question-bank', QuestionBankRoute)
     app.use('/examenes', express.static(path.join(process.cwd(), "examenes")));
+    app.use('/uploads', express.static(path.join(process.cwd(), "uploads")));
 
 
 }

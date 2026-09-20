@@ -28,8 +28,10 @@ export async function createExam(
     ordenAleatorio = false,
     lenguajeProgramacion,
     intellisenseHabilitado = false,
+    enunciadoTipo = 'texto',
     enunciadoProgramacion,
     enunciadoUrl,
+    enunciadoArchivoNombre,
     codigoInicial,
     testCases,
     solucionReferencia,
@@ -46,11 +48,27 @@ export async function createExam(
         } as ExamValidationError
       };
     }
-    if (!enunciadoProgramacion) {
+    if (!['texto', 'archivo'].includes(enunciadoTipo)) {
+      return {
+        error: {
+          status: 400,
+          error: "enunciadoTipo debe ser 'texto' o 'archivo'"
+        } as ExamValidationError
+      };
+    }
+    if (enunciadoTipo === 'texto' && !enunciadoProgramacion) {
       return {
         error: {
           status: 400,
           error: "Para exámenes de programación se requiere especificar el enunciado"
+        } as ExamValidationError
+      };
+    }
+    if (enunciadoTipo === 'archivo' && !enunciadoUrl) {
+      return {
+        error: {
+          status: 400,
+          error: "Para exámenes de programación con consigna en archivo se requiere subir el archivo"
         } as ExamValidationError
       };
     }
@@ -76,8 +94,11 @@ export async function createExam(
   if (tipo === 'programming') {
     examData.lenguajeProgramacion = lenguajeProgramacion;
     examData.intellisenseHabilitado = intellisenseHabilitado;
-    examData.enunciadoProgramacion = enunciadoProgramacion;
-    examData.enunciadoUrl = enunciadoUrl || null;
+    examData.enunciadoTipo = enunciadoTipo;
+    // Mutuamente excluyentes: solo se persiste el campo correspondiente al tipo elegido.
+    examData.enunciadoProgramacion = enunciadoTipo === 'texto' ? enunciadoProgramacion : null;
+    examData.enunciadoUrl = enunciadoTipo === 'archivo' ? enunciadoUrl : null;
+    examData.enunciadoArchivoNombre = enunciadoTipo === 'archivo' ? (enunciadoArchivoNombre || null) : null;
     examData.codigoInicial = codigoInicial || '';
     examData.testCases = testCases || [];
     examData.solucionReferencia = solucionReferencia || null;
