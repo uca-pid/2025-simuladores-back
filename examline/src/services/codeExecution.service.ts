@@ -1,16 +1,22 @@
 import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
-import { writeFile, unlink, mkdir } from 'fs/promises';
+import { writeFile, unlink, mkdir, rm } from 'fs/promises';
 import path from 'path';
 import { randomBytes } from 'crypto';
 import os from 'os';
 
 const execAsync = promisify(exec);
 
+interface DatasetFile {
+  name: string; // nombre de archivo que el código del alumno espera abrir, ej. "vuelos.csv"
+  content: string;
+}
+
 interface ExecutionOptions {
   timeout?: number; // en milisegundos
   maxMemory?: string; // ej: '128m'
   input?: string; // Input para stdin del programa
+  dataset?: DatasetFile; // archivo de datos que se deja junto al código, accesible con open() por nombre relativo
 }
 
 interface ExecutionResult {
@@ -69,9 +75,9 @@ class CodeExecutionService {
 
     try {
       if (language === 'python') {
-        return await this.executePython(code, timeout, input);
+        return await this.executePython(code, timeout, input, options.dataset);
       } else if (language === 'javascript') {
-        return await this.executeJavaScript(code, timeout, input);
+        return await this.executeJavaScript(code, timeout, input, options.dataset);
       } else {
         throw new Error(`Lenguaje no soportado: ${language}`);
       }
@@ -93,19 +99,21 @@ class CodeExecutionService {
    * Versión futura (Docker):
    * docker run --rm -v ${tempFile}:/code.py -m ${maxMemory} python:3.11-alpine python /code.py
    */
-  private async executePython(code: string, timeout: number, input: string = ''): Promise<ExecutionResult> {
+  private async executePython(code: string, timeout: number, input: string = '', dataset?: DatasetFile): Promise<ExecutionResult> {
     const startTime = Date.now();
-    const tempFile = await this.createTempFile(code, '.py');
+    const { dir, codeFile } = await this.createExecutionDir(code, '.py', dataset);
 
     return new Promise((resolve) => {
       let stdout = '';
       let stderr = '';
       let isTimeout = false;
 
-      // Usar spawn para mejor manejo de stdin
-      const pythonProcess = spawn('python', [tempFile], {
+      // Usar spawn para mejor manejo de stdin. cwd = dir de ejecucion: asi
+      // open("archivo.csv") (ruta relativa) encuentra el dataset dejado al lado del codigo.
+      const pythonProcess = spawn('python', [codeFile], {
         windowsHide: true,
-        env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
+        cwd: dir,
+        env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
       });
 
       // Configurar timeout
@@ -140,7 +148,7 @@ class CodeExecutionService {
         const executionTime = Date.now() - startTime;
 
         // Limpiar archivo temporal
-        await this.cleanupTempFile(tempFile);
+        await this.cleanupExecutionDir(dir);
 
         if (isTimeout) {
           resolve({
@@ -165,7 +173,7 @@ class CodeExecutionService {
         const executionTime = Date.now() - startTime;
         
         // Limpiar archivo temporal
-        await this.cleanupTempFile(tempFile);
+        await this.cleanupExecutionDir(dir);
 
         resolve({
           output: '',
@@ -184,21 +192,23 @@ class CodeExecutionService {
    * Versión futura (Docker):
    * docker run --rm -v ${tempFile}:/code.js -m ${maxMemory} node:18-alpine node /code.js
    */
-  private async executeJavaScript(code: string, timeout: number, input: string = ''): Promise<ExecutionResult> {
+  private async executeJavaScript(code: string, timeout: number, input: string = '', dataset?: DatasetFile): Promise<ExecutionResult> {
     const startTime = Date.now();
-    
+
     // Inyectar polyfill de prompt() para Node.js
     const codeWithPromptPolyfill = this.injectPromptPolyfill(code);
-    const tempFile = await this.createTempFile(codeWithPromptPolyfill, '.js');
+    const { dir, codeFile } = await this.createExecutionDir(codeWithPromptPolyfill, '.js', dataset);
 
     return new Promise((resolve) => {
       let stdout = '';
       let stderr = '';
       let isTimeout = false;
 
-      // Usar spawn para mejor manejo de stdin
-      const nodeProcess = spawn('node', [tempFile], {
+      // Usar spawn para mejor manejo de stdin. cwd = dir de ejecucion: asi
+      // fs.readFileSync("archivo.csv") (ruta relativa) encuentra el dataset dejado al lado del codigo.
+      const nodeProcess = spawn('node', [codeFile], {
         windowsHide: true,
+        cwd: dir,
       });
 
       // Configurar timeout
@@ -233,7 +243,7 @@ class CodeExecutionService {
         const executionTime = Date.now() - startTime;
 
         // Limpiar archivo temporal
-        await this.cleanupTempFile(tempFile);
+        await this.cleanupExecutionDir(dir);
 
         if (isTimeout) {
           resolve({
@@ -258,7 +268,7 @@ class CodeExecutionService {
         const executionTime = Date.now() - startTime;
         
         // Limpiar archivo temporal
-        await this.cleanupTempFile(tempFile);
+        await this.cleanupExecutionDir(dir);
 
         resolve({
           output: '',
@@ -432,6 +442,43 @@ rl.on('close', () => {
     } catch (error) {
       // Ignorar errores al eliminar (el archivo puede no existir)
       console.warn(`No se pudo eliminar archivo temporal: ${filePath}`);
+    }
+  }
+
+  /**
+   * Crea un directorio aislado y único para una ejecución, con el archivo de
+   * código y (si corresponde) el dataset CSV al lado, para que el código del
+   * alumno pueda abrirlo por nombre relativo (ej. open("archivo.csv")).
+   * El directorio es único por ejecución para que corridas concurrentes de
+   * distintos alumnos no compartan ni pisen el mismo archivo de dataset.
+   */
+  private async createExecutionDir(
+    code: string,
+    extension: string,
+    dataset?: DatasetFile
+  ): Promise<{ dir: string; codeFile: string }> {
+    const dir = path.join(this.tempDir, `exec_${randomBytes(16).toString('hex')}`);
+    await mkdir(dir, { recursive: true });
+
+    const codeFile = path.join(dir, `code${extension}`);
+    await writeFile(codeFile, code, 'utf-8');
+
+    if (dataset) {
+      const datasetPath = path.join(dir, dataset.name);
+      await writeFile(datasetPath, dataset.content, 'utf-8');
+    }
+
+    return { dir, codeFile };
+  }
+
+  /**
+   * Elimina el directorio de ejecución completo (código + dataset).
+   */
+  private async cleanupExecutionDir(dir: string): Promise<void> {
+    try {
+      await rm(dir, { recursive: true, force: true });
+    } catch (error) {
+      console.warn(`No se pudo eliminar el directorio de ejecución: ${dir}`);
     }
   }
 

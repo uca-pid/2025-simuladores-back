@@ -1,5 +1,25 @@
 import { type PrismaClient } from "@prisma/client";
+import { readFile } from "fs/promises";
+import path from "path";
 import CodeExecutionService from "./codeExecution.service.ts";
+
+/**
+ * Lee del disco el CSV de dataset asociado a un examen (si tiene uno subido),
+ * para poder dejarlo junto al código durante la ejecución (ver
+ * CodeExecutionService.executeCode / DatasetFile).
+ */
+async function loadExamDataset(exam: { datasetCsvUrl?: string | null; datasetCsvNombre?: string | null }) {
+  if (!exam.datasetCsvUrl || !exam.datasetCsvNombre) return undefined;
+
+  try {
+    const filePath = path.join(process.cwd(), exam.datasetCsvUrl.replace(/^\/+/, ""));
+    const content = await readFile(filePath, "utf-8");
+    return { name: exam.datasetCsvNombre, content };
+  } catch (err) {
+    console.error("No se pudo leer el dataset CSV del examen:", err);
+    return undefined;
+  }
+}
 
 /**
  * Resultado de validar acceso/propiedad sobre un examen. Devuelve null si todo
@@ -32,6 +52,8 @@ export async function createExam(
     enunciadoProgramacion,
     enunciadoUrl,
     enunciadoArchivoNombre,
+    datasetCsvUrl,
+    datasetCsvNombre,
     codigoInicial,
     testCases,
     solucionReferencia,
@@ -99,6 +121,9 @@ export async function createExam(
     examData.enunciadoProgramacion = enunciadoTipo === 'texto' ? enunciadoProgramacion : null;
     examData.enunciadoUrl = enunciadoTipo === 'archivo' ? enunciadoUrl : null;
     examData.enunciadoArchivoNombre = enunciadoTipo === 'archivo' ? (enunciadoArchivoNombre || null) : null;
+    // El dataset CSV es independiente del tipo de consigna (texto o archivo)
+    examData.datasetCsvUrl = datasetCsvUrl || null;
+    examData.datasetCsvNombre = datasetCsvUrl ? (datasetCsvNombre || null) : null;
     examData.codigoInicial = codigoInicial || '';
     examData.testCases = testCases || [];
     examData.solucionReferencia = solucionReferencia || null;
@@ -444,11 +469,12 @@ export async function testSolution(
   }
 
   // Ejecutar los tests
+  const dataset = await loadExamDataset(exam);
   const testResults = await codeExecutionService.runTests(
     codeToExecute,
     exam.lenguajeProgramacion as 'python' | 'javascript',
     exam.testCases as any[],
-    { timeout: 10000 }
+    { timeout: 10000, dataset }
   );
 
   return { testResults };

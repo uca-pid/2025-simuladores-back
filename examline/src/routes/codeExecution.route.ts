@@ -1,7 +1,22 @@
 import { Router } from 'express';
 import { PrismaClient } from '@prisma/client';
+import { readFile } from 'fs/promises';
+import path from 'path';
 import { authenticateToken, requireRole } from '../middleware/auth';
 import CodeExecutionService from '../services/codeExecution.service.ts';
+
+async function loadExamDataset(exam: { datasetCsvUrl?: string | null; datasetCsvNombre?: string | null }) {
+  if (!exam.datasetCsvUrl || !exam.datasetCsvNombre) return undefined;
+
+  try {
+    const filePath = path.join(process.cwd(), exam.datasetCsvUrl.replace(/^\/+/, ''));
+    const content = await readFile(filePath, 'utf-8');
+    return { name: exam.datasetCsvNombre, content };
+  } catch (err) {
+    console.error('No se pudo leer el dataset CSV del examen:', err);
+    return undefined;
+  }
+}
 
 const CodeExecutionRoute = (prisma: PrismaClient) => {
   const router = Router();
@@ -32,6 +47,7 @@ const CodeExecutionRoute = (prisma: PrismaClient) => {
       }
 
       // Validar examen y permisos
+      let dataset;
       if (examId) {
         const exam = await prisma.exam.findUnique({
           where: { id: parseInt(examId) }
@@ -64,6 +80,8 @@ const CodeExecutionRoute = (prisma: PrismaClient) => {
             return res.status(403).json({ error: 'No estás inscrito en una ventana activa de este examen' });
           }
         }
+
+        dataset = await loadExamDataset(exam);
       }
 
       // Ejecutar código
@@ -74,6 +92,7 @@ const CodeExecutionRoute = (prisma: PrismaClient) => {
           timeout: 10000, // 10 segundos
           maxMemory: '128m',
           input: input || '', // Pasar el input del usuario
+          dataset,
         }
       );
 

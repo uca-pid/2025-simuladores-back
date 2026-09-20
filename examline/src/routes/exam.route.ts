@@ -17,6 +17,9 @@ import {
 const UPLOADS_DIR = path.join(process.cwd(), "uploads", "enunciados");
 fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
+const DATASETS_DIR = path.join(process.cwd(), "uploads", "datasets");
+fs.mkdirSync(DATASETS_DIR, { recursive: true });
+
 const ALLOWED_MIME_TYPES: Record<string, string> = {
   "application/pdf": ".pdf",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx"
@@ -36,6 +39,26 @@ const enunciadoUpload = multer({
       cb(null, true);
     } else {
       cb(new Error("Solo se permiten archivos PDF o DOCX"));
+    }
+  }
+});
+
+// El navegador puede reportar distintos mimetypes para .csv según el SO/Excel
+const ALLOWED_CSV_EXTENSION = /\.csv$/i;
+
+const datasetUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, DATASETS_DIR),
+    filename: (_req, _file, cb) => {
+      cb(null, `${Date.now()}-${Math.round(Math.random() * 1e9)}.csv`);
+    }
+  }),
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+  fileFilter: (_req, file, cb) => {
+    if (ALLOWED_CSV_EXTENSION.test(file.originalname)) {
+      cb(null, true);
+    } else {
+      cb(new Error("Solo se permiten archivos CSV"));
     }
   }
 });
@@ -65,6 +88,34 @@ const ExamRoute = (prisma: PrismaClient) => {
 
         res.status(201).json({
           url: `/uploads/enunciados/${req.file.filename}`,
+          nombre: req.file.originalname
+        });
+      });
+    }
+  );
+
+  // POST /exams/upload-dataset (protected - professors only)
+  // Sube un archivo CSV con datos que el código del alumno podrá abrir/leer
+  // durante la ejecución (ej. open("archivo.csv")).
+  router.post(
+    "/upload-dataset",
+    authenticateToken,
+    requireRole(['professor']),
+    (req, res) => {
+      datasetUpload.single("archivo")(req, res, (err: any) => {
+        if (err) {
+          const message = err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE'
+            ? "El archivo supera el tamaño máximo permitido (5MB)"
+            : err.message || "Error al subir el archivo";
+          return res.status(400).json({ error: message });
+        }
+
+        if (!req.file) {
+          return res.status(400).json({ error: "Debe adjuntar un archivo" });
+        }
+
+        res.status(201).json({
+          url: `/uploads/datasets/${req.file.filename}`,
           nombre: req.file.originalname
         });
       });
