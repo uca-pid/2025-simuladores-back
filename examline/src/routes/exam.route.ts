@@ -43,22 +43,24 @@ const enunciadoUpload = multer({
   }
 });
 
-// El navegador puede reportar distintos mimetypes para .csv según el SO/Excel
-const ALLOWED_CSV_EXTENSION = /\.csv$/i;
+// El navegador puede reportar distintos mimetypes para .csv/.txt según el SO/Excel,
+// por eso se valida por extensión del nombre original en vez de por mimetype.
+const ALLOWED_DATASET_EXTENSION = /\.(csv|txt)$/i;
 
 const datasetUpload = multer({
   storage: multer.diskStorage({
     destination: (_req, _file, cb) => cb(null, DATASETS_DIR),
-    filename: (_req, _file, cb) => {
-      cb(null, `${Date.now()}-${Math.round(Math.random() * 1e9)}.csv`);
+    filename: (_req, file, cb) => {
+      const ext = file.originalname.toLowerCase().endsWith('.txt') ? '.txt' : '.csv';
+      cb(null, `${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`);
     }
   }),
   limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
   fileFilter: (_req, file, cb) => {
-    if (ALLOWED_CSV_EXTENSION.test(file.originalname)) {
+    if (ALLOWED_DATASET_EXTENSION.test(file.originalname)) {
       cb(null, true);
     } else {
-      cb(new Error("Solo se permiten archivos CSV"));
+      cb(new Error("Solo se permiten archivos CSV o TXT"));
     }
   }
 });

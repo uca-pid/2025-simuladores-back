@@ -4,21 +4,40 @@ import path from "path";
 import CodeExecutionService from "./codeExecution.service.ts";
 
 /**
- * Lee del disco el CSV de dataset asociado a un examen (si tiene uno subido),
- * para poder dejarlo junto al código durante la ejecución (ver
- * CodeExecutionService.executeCode / DatasetFile).
+ * Lee del disco todos los archivos de dataset asociados a un examen (si tiene),
+ * para poder dejarlos junto al código durante la ejecución (ver
+ * CodeExecutionService.executeCode / DatasetFile). Soporta tanto el array
+ * nuevo `datasetFiles` como, por compatibilidad con exámenes creados antes de
+ * esta función, el par legacy `datasetCsvUrl`/`datasetCsvNombre` (un solo archivo).
  */
-async function loadExamDataset(exam: { datasetCsvUrl?: string | null; datasetCsvNombre?: string | null }) {
-  if (!exam.datasetCsvUrl || !exam.datasetCsvNombre) return undefined;
+export async function loadExamDatasets(exam: {
+  datasetFiles?: unknown;
+  datasetCsvUrl?: string | null;
+  datasetCsvNombre?: string | null;
+}) {
+  const entries: Array<{ url: string; nombre: string }> =
+    Array.isArray(exam.datasetFiles) ? (exam.datasetFiles as any[]) : [];
 
-  try {
-    const filePath = path.join(process.cwd(), exam.datasetCsvUrl.replace(/^\/+/, ""));
-    const content = await readFile(filePath, "utf-8");
-    return { name: exam.datasetCsvNombre, content };
-  } catch (err) {
-    console.error("No se pudo leer el dataset CSV del examen:", err);
-    return undefined;
-  }
+  const allEntries = entries.length > 0
+    ? entries
+    : (exam.datasetCsvUrl && exam.datasetCsvNombre
+      ? [{ url: exam.datasetCsvUrl, nombre: exam.datasetCsvNombre }]
+      : []);
+
+  const datasets = await Promise.all(
+    allEntries.map(async ({ url, nombre }) => {
+      try {
+        const filePath = path.join(process.cwd(), url.replace(/^\/+/, ""));
+        const content = await readFile(filePath, "utf-8");
+        return { name: nombre, content };
+      } catch (err) {
+        console.error(`No se pudo leer el dataset "${nombre}" del examen:`, err);
+        return null;
+      }
+    })
+  );
+
+  return datasets.filter((d): d is { name: string; content: string } => d !== null);
 }
 
 /**
@@ -52,8 +71,7 @@ export async function createExam(
     enunciadoProgramacion,
     enunciadoUrl,
     enunciadoArchivoNombre,
-    datasetCsvUrl,
-    datasetCsvNombre,
+    datasetFiles,
     codigoInicial,
     testCases,
     solucionReferencia,
@@ -121,9 +139,13 @@ export async function createExam(
     examData.enunciadoProgramacion = enunciadoTipo === 'texto' ? enunciadoProgramacion : null;
     examData.enunciadoUrl = enunciadoTipo === 'archivo' ? enunciadoUrl : null;
     examData.enunciadoArchivoNombre = enunciadoTipo === 'archivo' ? (enunciadoArchivoNombre || null) : null;
-    // El dataset CSV es independiente del tipo de consigna (texto o archivo)
-    examData.datasetCsvUrl = datasetCsvUrl || null;
-    examData.datasetCsvNombre = datasetCsvUrl ? (datasetCsvNombre || null) : null;
+    // Los datasets son independientes del tipo de consigna (texto o archivo).
+    // Se guarda como array de { url, nombre }; los campos legacy datasetCsvUrl/
+    // datasetCsvNombre quedan sin usar para exámenes nuevos (se leen igual para
+    // exámenes viejos vía loadExamDatasets).
+    examData.datasetFiles = Array.isArray(datasetFiles) && datasetFiles.length > 0
+      ? datasetFiles.filter((f: any) => f?.url && f?.nombre)
+      : null;
     examData.codigoInicial = codigoInicial || '';
     examData.testCases = testCases || [];
     examData.solucionReferencia = solucionReferencia || null;
@@ -469,12 +491,12 @@ export async function testSolution(
   }
 
   // Ejecutar los tests
-  const dataset = await loadExamDataset(exam);
+  const datasets = await loadExamDatasets(exam);
   const testResults = await codeExecutionService.runTests(
     codeToExecute,
     exam.lenguajeProgramacion as 'python' | 'javascript',
     exam.testCases as any[],
-    { timeout: 10000, dataset }
+    { timeout: 10000, datasets }
   );
 
   return { testResults };

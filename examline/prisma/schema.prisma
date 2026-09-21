@@ -33,8 +33,9 @@ model Exam {
   enunciadoProgramacion String?       // enunciado en texto (solo si enunciadoTipo = "texto")
   enunciadoUrl          String?       // ruta al archivo PDF/DOCX de consigna subido (solo si enunciadoTipo = "archivo")
   enunciadoArchivoNombre String?      // nombre original del archivo subido, para mostrar en la UI
-  datasetCsvUrl         String?       // ruta al archivo CSV de datos subido (opcional, independiente de la consigna)
-  datasetCsvNombre      String?       // nombre original del CSV, se usa como nombre de archivo en el sandbox de ejecución
+  datasetCsvUrl         String?       // [legacy] ruta al único CSV de datos de versiones anteriores; usar datasetFiles
+  datasetCsvNombre      String?       // [legacy] nombre original del CSV de versiones anteriores; usar datasetFiles
+  datasetFiles          Json?         // array de { url, nombre } con los archivos de datos subidos (CSV/TXT), opcional e independiente de la consigna
   codigoInicial         String?       // código inicial/template para exámenes de programación
   testCases             Json?         // casos de prueba para evaluación automática de exámenes de programación
   solucionReferencia    String?       // solución de referencia del profesor (solo visible para él)

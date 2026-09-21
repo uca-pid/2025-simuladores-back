@@ -16,7 +16,7 @@ interface ExecutionOptions {
   timeout?: number; // en milisegundos
   maxMemory?: string; // ej: '128m'
   input?: string; // Input para stdin del programa
-  dataset?: DatasetFile; // archivo de datos que se deja junto al código, accesible con open() por nombre relativo
+  datasets?: DatasetFile[]; // archivos de datos que se dejan junto al código, accesibles con open() por nombre relativo
 }
 
 interface ExecutionResult {
@@ -75,9 +75,9 @@ class CodeExecutionService {
 
     try {
       if (language === 'python') {
-        return await this.executePython(code, timeout, input, options.dataset);
+        return await this.executePython(code, timeout, input, options.datasets);
       } else if (language === 'javascript') {
-        return await this.executeJavaScript(code, timeout, input, options.dataset);
+        return await this.executeJavaScript(code, timeout, input, options.datasets);
       } else {
         throw new Error(`Lenguaje no soportado: ${language}`);
       }
@@ -99,9 +99,9 @@ class CodeExecutionService {
    * Versión futura (Docker):
    * docker run --rm -v ${tempFile}:/code.py -m ${maxMemory} python:3.11-alpine python /code.py
    */
-  private async executePython(code: string, timeout: number, input: string = '', dataset?: DatasetFile): Promise<ExecutionResult> {
+  private async executePython(code: string, timeout: number, input: string = '', datasets?: DatasetFile[]): Promise<ExecutionResult> {
     const startTime = Date.now();
-    const { dir, codeFile } = await this.createExecutionDir(code, '.py', dataset);
+    const { dir, codeFile } = await this.createExecutionDir(code, '.py', datasets);
 
     return new Promise((resolve) => {
       let stdout = '';
@@ -192,12 +192,12 @@ class CodeExecutionService {
    * Versión futura (Docker):
    * docker run --rm -v ${tempFile}:/code.js -m ${maxMemory} node:18-alpine node /code.js
    */
-  private async executeJavaScript(code: string, timeout: number, input: string = '', dataset?: DatasetFile): Promise<ExecutionResult> {
+  private async executeJavaScript(code: string, timeout: number, input: string = '', datasets?: DatasetFile[]): Promise<ExecutionResult> {
     const startTime = Date.now();
 
     // Inyectar polyfill de prompt() para Node.js
     const codeWithPromptPolyfill = this.injectPromptPolyfill(code);
-    const { dir, codeFile } = await this.createExecutionDir(codeWithPromptPolyfill, '.js', dataset);
+    const { dir, codeFile } = await this.createExecutionDir(codeWithPromptPolyfill, '.js', datasets);
 
     return new Promise((resolve) => {
       let stdout = '';
@@ -447,15 +447,15 @@ rl.on('close', () => {
 
   /**
    * Crea un directorio aislado y único para una ejecución, con el archivo de
-   * código y (si corresponde) el dataset CSV al lado, para que el código del
-   * alumno pueda abrirlo por nombre relativo (ej. open("archivo.csv")).
+   * código y (si corresponde) los datasets al lado, para que el código del
+   * alumno pueda abrirlos por nombre relativo (ej. open("archivo.csv")).
    * El directorio es único por ejecución para que corridas concurrentes de
-   * distintos alumnos no compartan ni pisen el mismo archivo de dataset.
+   * distintos alumnos no compartan ni pisen los mismos archivos de dataset.
    */
   private async createExecutionDir(
     code: string,
     extension: string,
-    dataset?: DatasetFile
+    datasets?: DatasetFile[]
   ): Promise<{ dir: string; codeFile: string }> {
     const dir = path.join(this.tempDir, `exec_${randomBytes(16).toString('hex')}`);
     await mkdir(dir, { recursive: true });
@@ -463,9 +463,10 @@ rl.on('close', () => {
     const codeFile = path.join(dir, `code${extension}`);
     await writeFile(codeFile, code, 'utf-8');
 
-    if (dataset) {
-      const datasetPath = path.join(dir, dataset.name);
-      await writeFile(datasetPath, dataset.content, 'utf-8');
+    if (datasets && datasets.length > 0) {
+      await Promise.all(datasets.map(dataset =>
+        writeFile(path.join(dir, dataset.name), dataset.content, 'utf-8')
+      ));
     }
 
     return { dir, codeFile };
