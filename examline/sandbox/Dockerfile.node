@@ -1,0 +1,21 @@
+# Imagen sandbox para ejecutar código JavaScript de exámenes de forma aislada.
+# Pensada para correr con: podman run --rm --network=none --read-only ...
+# (ver codeExecution.service.ts para los flags completos de hardening)
+
+FROM node:18-alpine
+
+# Usuario no-root dedicado. Combinado con podman rootless (user namespaces),
+# un proceso que escape del contenedor cae como un UID sin privilegios del
+# host, nunca como root.
+RUN addgroup -S sandbox && adduser -S -G sandbox -h /home/sandbox sandbox
+
+WORKDIR /code
+# El WORKDIR queda root:root pero legible por cualquiera (755): el usuario
+# sandbox solo necesita poder abrir el archivo que se monta de solo lectura,
+# nunca escribir ahí.
+RUN chmod 755 /code
+
+USER sandbox
+
+# No se define ENTRYPOINT/CMD: el comando (node /code/script.js) lo pasa
+# el service al hacer `podman run ... examline-sandbox-node node /code/script.js`

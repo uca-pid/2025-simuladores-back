@@ -25,13 +25,43 @@ interface ValidationResult {
   errors: string[];
 }
 
+type SupportedLanguage = 'python' | 'javascript';
+
+// Imágenes construidas por sandbox/build.sh (ver sandbox/Dockerfile.python y
+// sandbox/Dockerfile.node). Corren con usuario no-root dentro del contenedor.
+const SANDBOX_IMAGES: Record<SupportedLanguage, string> = {
+  python: 'examline-sandbox-python',
+  javascript: 'examline-sandbox-node',
+};
+
+const CONTAINER_SCRIPT_PATH: Record<SupportedLanguage, string> = {
+  python: '/code/script.py',
+  javascript: '/code/script.js',
+};
+
+// Límite de salida por ejecución: evita que un programa haga flood de stdout
+// y agote memoria/disco del backend antes de que el timeout llegue a actuar.
+const MAX_OUTPUT_BYTES = 1_000_000; // 1MB
+
 /**
- * Servicio para ejecutar código de forma segura
- * 
- * Arquitectura diseñada para migrar fácilmente a Docker:
- * - Cada ejecución es aislada en archivos temporales
- * - Límites de tiempo y memoria
- * - Fácil de reemplazar con llamadas a contenedores Docker
+ * Servicio para ejecutar código de forma aislada.
+ *
+ * Cada ejecución corre en un contenedor Podman (rootless) efímero, con:
+ * - Sin red (--network=none): imposible exfiltrar datos o escanear la red interna
+ * - Filesystem de solo lectura (--read-only + tmpfs acotado para /tmp)
+ * - Sin capabilities de Linux (--cap-drop=ALL) ni escalado de privilegios
+ *   (--security-opt=no-new-privileges)
+ * - Límite de memoria, CPU y cantidad de procesos (--pids-limit, anti fork-bomb)
+ * - Usuario no-root dentro del contenedor, y Podman corriendo en modo
+ *   rootless en el host: no hay daemon root involucrado, y un escape del
+ *   contenedor aterriza como un UID sin privilegios del host, nunca como root.
+ *
+ * Nota de diseño importante: Podman desacopla el ciclo de vida del
+ * contenedor (vía `conmon`) del proceso `podman run` en sí. Matar el
+ * proceso local del CLI NO garantiza que el contenedor se detenga si el
+ * programa dentro sigue corriendo. Por eso el timeout y el límite de
+ * salida hacen `podman stop --time 0 <nombre>` (SIGKILL inmediato al
+ * contenedor) en vez de confiar solo en matar el proceso hijo de Node.
  */
 class CodeExecutionService {
   private tempDir: string;
@@ -51,30 +81,23 @@ class CodeExecutionService {
   }
 
   /**
-   * Ejecuta código Python o JavaScript
-   * 
-   * TODO: Migrar a Docker para mayor seguridad
-   * Cuando se migre a Docker:
-   * - Reemplazar execAsync con docker run
-   * - Montar volumen con el archivo de código
-   * - Usar imágenes de Python/Node.js oficiales
+   * Ejecuta código Python o JavaScript dentro de un contenedor aislado.
    */
   async executeCode(
     code: string,
-    language: 'python' | 'javascript',
+    language: SupportedLanguage,
     options: ExecutionOptions = {}
   ): Promise<ExecutionResult> {
     const startTime = Date.now();
     const { timeout = 10000, maxMemory = '128m', input = '' } = options;
 
     try {
-      if (language === 'python') {
-        return await this.executePython(code, timeout, input);
-      } else if (language === 'javascript') {
-        return await this.executeJavaScript(code, timeout, input);
-      } else {
+      if (language !== 'python' && language !== 'javascript') {
         throw new Error(`Lenguaje no soportado: ${language}`);
       }
+
+      const preparedCode = language === 'javascript' ? this.injectPromptPolyfill(code) : code;
+      return await this.runSandboxed(preparedCode, language, timeout, maxMemory, input);
     } catch (error: any) {
       const executionTime = Date.now() - startTime;
       return {
@@ -87,89 +110,159 @@ class CodeExecutionService {
   }
 
   /**
-   * Ejecuta código Python 3.11
-   * 
-   * Versión actual: Ejecución directa con python3
-   * Versión futura (Docker):
-   * docker run --rm -v ${tempFile}:/code.py -m ${maxMemory} python:3.11-alpine python /code.py
+   * Arma los argumentos de `podman run` con todos los flags de hardening.
+   * Cada flag cierra una superficie de ataque puntual:
+   * --network=none      -> sin exfiltración de datos ni acceso a red interna
+   * --memory/--cpus      -> sin agotamiento de recursos del host (DoS)
+   * --pids-limit         -> sin fork bombs
+   * --read-only + tmpfs  -> sin persistencia ni escritura fuera de /tmp
+   * --cap-drop=ALL        -> sin capabilities de Linux (no puede, por ej., abrir sockets raw)
+   * --security-opt no-new-privileges -> no puede escalar privilegios vía setuid binaries
    */
-  private async executePython(code: string, timeout: number, input: string = ''): Promise<ExecutionResult> {
+  private buildPodmanArgs(
+    containerName: string,
+    image: string,
+    hostFile: string,
+    containerFile: string,
+    command: string[],
+    maxMemory: string
+  ): string[] {
+    return [
+      'run',
+      '--rm',
+      '--name', containerName,
+      '--network=none',
+      `--memory=${maxMemory}`,
+      `--memory-swap=${maxMemory}`,
+      '--cpus=0.5',
+      '--pids-limit=64',
+      '--read-only',
+      '--tmpfs=/tmp:rw,size=16m',
+      '--cap-drop=ALL',
+      '--security-opt=no-new-privileges',
+      '-v', `${hostFile}:${containerFile}:ro`,
+      '-i',
+      image,
+      ...command,
+    ];
+  }
+
+  /**
+   * Detiene un contenedor de forma forzada e inmediata (SIGKILL, sin esperar
+   * el grace period de SIGTERM). Se usa ante timeout o exceso de salida:
+   * en ambos casos ya asumimos que el proceso es sospechoso o descontrolado,
+   * así que no tiene sentido esperar a que termine solo.
+   * Los errores se ignoran: el contenedor puede ya haber salido solo.
+   */
+  private async forceStopContainer(containerName: string): Promise<void> {
+    try {
+      await execAsync(`podman stop --time 0 ${containerName}`, { timeout: 5000 });
+    } catch {
+      // No es un error real para nosotros: ya no existía o ya se detuvo.
+    }
+  }
+
+  /**
+   * Ejecuta código dentro de un contenedor Podman efímero y aislado.
+   */
+  private async runSandboxed(
+    code: string,
+    language: SupportedLanguage,
+    timeout: number,
+    maxMemory: string,
+    input: string = ''
+  ): Promise<ExecutionResult> {
     const startTime = Date.now();
-    const tempFile = await this.createTempFile(code, '.py');
+    const extension = language === 'python' ? '.py' : '.js';
+    const tempFile = await this.createTempFile(code, extension);
+    const containerFile = CONTAINER_SCRIPT_PATH[language];
+    const image = SANDBOX_IMAGES[language];
+    const runtimeCommand = language === 'python' ? ['python', containerFile] : ['node', containerFile];
+    const containerName = `exam-exec-${randomBytes(8).toString('hex')}`;
+
+    const args = this.buildPodmanArgs(containerName, image, tempFile, containerFile, runtimeCommand, maxMemory);
 
     return new Promise((resolve) => {
       let stdout = '';
       let stderr = '';
       let isTimeout = false;
+      let outputExceeded = false;
+      let settled = false;
 
-      // Usar spawn para mejor manejo de stdin
-      const pythonProcess = spawn('python', [tempFile], {
-        windowsHide: true,
-        env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
-      });
+      const podmanProcess = spawn('podman', args, { windowsHide: true });
 
-      // Configurar timeout
       const timeoutId = setTimeout(() => {
         isTimeout = true;
-        pythonProcess.kill('SIGTERM');
+        void this.forceStopContainer(containerName);
+        podmanProcess.kill('SIGKILL');
       }, timeout);
 
-      // Capturar stdout
-      pythonProcess.stdout.on('data', (data) => {
+      const finish = async (result: ExecutionResult) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeoutId);
+        await this.cleanupTempFile(tempFile);
+        resolve(result);
+      };
+
+      podmanProcess.stdout.on('data', (data) => {
+        if (outputExceeded) return;
         stdout += data.toString();
+        if (stdout.length > MAX_OUTPUT_BYTES) {
+          outputExceeded = true;
+          void this.forceStopContainer(containerName);
+          podmanProcess.kill('SIGKILL');
+        }
       });
 
-      // Capturar stderr
-      pythonProcess.stderr.on('data', (data) => {
+      podmanProcess.stderr.on('data', (data) => {
         stderr += data.toString();
       });
 
-      // Enviar input si existe
-      if (input) {
-        // Asegurar que el input termine con nueva línea para que input() funcione correctamente
-        const inputWithNewline = input.endsWith('\n') ? input : input + '\n';
-        pythonProcess.stdin.write(inputWithNewline);
-        pythonProcess.stdin.end();
-      } else {
-        pythonProcess.stdin.end();
+      // Enviar input si existe (idéntico al comportamiento previo con spawn directo)
+      try {
+        if (input) {
+          const inputWithNewline = input.endsWith('\n') ? input : input + '\n';
+          podmanProcess.stdin.write(inputWithNewline);
+        }
+        podmanProcess.stdin.end();
+      } catch {
+        // Si el proceso ya murió, escribir a su stdin puede tirar EPIPE;
+        // el manejo de 'close'/'error' de abajo se encarga del resultado final.
       }
 
-      // Manejar finalización
-      pythonProcess.on('close', async (code) => {
-        clearTimeout(timeoutId);
+      podmanProcess.on('close', (exitCode) => {
         const executionTime = Date.now() - startTime;
 
-        // Limpiar archivo temporal
-        await this.cleanupTempFile(tempFile);
-
         if (isTimeout) {
-          resolve({
-            output: stdout || '',
+          void finish({
+            output: stdout,
             error: `Tiempo de ejecución excedido (máximo ${timeout}ms)`,
             exitCode: 124,
             executionTime
           });
+        } else if (outputExceeded) {
+          void finish({
+            output: stdout.slice(0, MAX_OUTPUT_BYTES),
+            error: `Salida excedida (máximo ${MAX_OUTPUT_BYTES} bytes)`,
+            exitCode: 1,
+            executionTime
+          });
         } else {
-          resolve({
+          void finish({
             output: stdout || '',
             error: stderr || null,
-            exitCode: code || 0,
+            exitCode: exitCode ?? 0,
             executionTime
           });
         }
       });
 
-      // Manejar errores del proceso
-      pythonProcess.on('error', async (error) => {
-        clearTimeout(timeoutId);
+      podmanProcess.on('error', (error) => {
         const executionTime = Date.now() - startTime;
-        
-        // Limpiar archivo temporal
-        await this.cleanupTempFile(tempFile);
-
-        resolve({
+        void finish({
           output: '',
-          error: error.message,
+          error: `No se pudo iniciar el contenedor: ${error.message}`,
           exitCode: 1,
           executionTime
         });
@@ -178,100 +271,7 @@ class CodeExecutionService {
   }
 
   /**
-   * Ejecuta código JavaScript con Node.js
-   * 
-   * Versión actual: Ejecución directa con node
-   * Versión futura (Docker):
-   * docker run --rm -v ${tempFile}:/code.js -m ${maxMemory} node:18-alpine node /code.js
-   */
-  private async executeJavaScript(code: string, timeout: number, input: string = ''): Promise<ExecutionResult> {
-    const startTime = Date.now();
-    
-    // Inyectar polyfill de prompt() para Node.js
-    const codeWithPromptPolyfill = this.injectPromptPolyfill(code);
-    const tempFile = await this.createTempFile(codeWithPromptPolyfill, '.js');
-
-    return new Promise((resolve) => {
-      let stdout = '';
-      let stderr = '';
-      let isTimeout = false;
-
-      // Usar spawn para mejor manejo de stdin
-      const nodeProcess = spawn('node', [tempFile], {
-        windowsHide: true,
-      });
-
-      // Configurar timeout
-      const timeoutId = setTimeout(() => {
-        isTimeout = true;
-        nodeProcess.kill('SIGTERM');
-      }, timeout);
-
-      // Capturar stdout
-      nodeProcess.stdout.on('data', (data) => {
-        stdout += data.toString();
-      });
-
-      // Capturar stderr
-      nodeProcess.stderr.on('data', (data) => {
-        stderr += data.toString();
-      });
-
-      // Enviar input si existe
-      if (input) {
-        // Asegurar que el input termine con nueva línea
-        const inputWithNewline = input.endsWith('\n') ? input : input + '\n';
-        nodeProcess.stdin.write(inputWithNewline);
-        nodeProcess.stdin.end();
-      } else {
-        nodeProcess.stdin.end();
-      }
-
-      // Manejar finalización
-      nodeProcess.on('close', async (code) => {
-        clearTimeout(timeoutId);
-        const executionTime = Date.now() - startTime;
-
-        // Limpiar archivo temporal
-        await this.cleanupTempFile(tempFile);
-
-        if (isTimeout) {
-          resolve({
-            output: stdout || '',
-            error: `Tiempo de ejecución excedido (máximo ${timeout}ms)`,
-            exitCode: 124,
-            executionTime
-          });
-        } else {
-          resolve({
-            output: stdout || '',
-            error: stderr || null,
-            exitCode: code || 0,
-            executionTime
-          });
-        }
-      });
-
-      // Manejar errores del proceso
-      nodeProcess.on('error', async (error) => {
-        clearTimeout(timeoutId);
-        const executionTime = Date.now() - startTime;
-        
-        // Limpiar archivo temporal
-        await this.cleanupTempFile(tempFile);
-
-        resolve({
-          output: '',
-          error: error.message,
-          exitCode: 1,
-          executionTime
-        });
-      });
-    });
-  }
-
-  /**
-   * Inyecta un polyfill de prompt() para Node.js que usa readline-sync
+   * Inyecta un polyfill de prompt() para Node.js que usa readline
    * Esto permite que el código JavaScript use prompt() como en el navegador
    */
   private injectPromptPolyfill(code: string): string {
@@ -322,7 +322,12 @@ rl.on('close', () => {
   }
 
   /**
-   * Valida la sintaxis del código sin ejecutarlo
+   * Valida la sintaxis del código sin ejecutarlo.
+   *
+   * A diferencia de executeCode, esto corre directo en el host (sin
+   * contenedor): py_compile.compile() y `node --check` solo parsean/compilan
+   * a bytecode, nunca ejecutan el código de nivel superior del usuario, así
+   * que no hay superficie de ataque real que aislar acá.
    */
   async validateSyntax(code: string, language: 'python' | 'javascript'): Promise<ValidationResult> {
     try {
@@ -353,7 +358,7 @@ rl.on('close', () => {
     try {
       // Usar py_compile para validar sintaxis
       const validateScript = `import py_compile; py_compile.compile('${tempFile.replace(/\\/g, '\\\\')}', doraise=True)`;
-      
+
       await execAsync(
         `python -c "${validateScript}"`,
         {
@@ -508,63 +513,6 @@ rl.on('close', () => {
       score
     };
   }
-
-  /**
-   * Método futuro para ejecutar código en Docker
-   * Descomentar cuando se implemente Docker
-   */
-  /*
-  private async executeInDocker(
-    code: string,
-    language: 'python' | 'javascript',
-    options: ExecutionOptions
-  ): Promise<ExecutionResult> {
-    const startTime = Date.now();
-    const tempFile = await this.createTempFile(
-      code,
-      language === 'python' ? '.py' : '.js'
-    );
-
-    const image = language === 'python' ? 'python:3.11-alpine' : 'node:18-alpine';
-    const command = language === 'python' ? 'python /code' : 'node /code';
-    
-    const dockerCommand = `docker run --rm \
-      --network none \
-      --memory ${options.maxMemory} \
-      --cpus 0.5 \
-      -v ${tempFile}:/code:ro \
-      ${image} \
-      ${command}`;
-
-    try {
-      const { stdout, stderr } = await execAsync(dockerCommand, {
-        timeout: options.timeout,
-        maxBuffer: 1024 * 1024
-      });
-
-      const executionTime = Date.now() - startTime;
-
-      return {
-        output: stdout || '',
-        error: stderr || null,
-        exitCode: 0,
-        executionTime
-      };
-
-    } catch (error: any) {
-      const executionTime = Date.now() - startTime;
-      return {
-        output: error.stdout || '',
-        error: error.stderr || error.message,
-        exitCode: error.code || 1,
-        executionTime
-      };
-
-    } finally {
-      await this.cleanupTempFile(tempFile);
-    }
-  }
-  */
 }
 
 export default CodeExecutionService;
