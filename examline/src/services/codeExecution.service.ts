@@ -105,7 +105,7 @@ class CodeExecutionService {
       // Usar spawn para mejor manejo de stdin
       const pythonProcess = spawn('python', [tempFile], {
         windowsHide: true,
-        env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
+        env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
       });
 
       // Configurar timeout
@@ -163,7 +163,7 @@ class CodeExecutionService {
       pythonProcess.on('error', async (error) => {
         clearTimeout(timeoutId);
         const executionTime = Date.now() - startTime;
-        
+
         // Limpiar archivo temporal
         await this.cleanupTempFile(tempFile);
 
@@ -186,7 +186,7 @@ class CodeExecutionService {
    */
   private async executeJavaScript(code: string, timeout: number, input: string = ''): Promise<ExecutionResult> {
     const startTime = Date.now();
-    
+
     // Inyectar polyfill de prompt() para Node.js
     const codeWithPromptPolyfill = this.injectPromptPolyfill(code);
     const tempFile = await this.createTempFile(codeWithPromptPolyfill, '.js');
@@ -256,7 +256,7 @@ class CodeExecutionService {
       nodeProcess.on('error', async (error) => {
         clearTimeout(timeoutId);
         const executionTime = Date.now() - startTime;
-        
+
         // Limpiar archivo temporal
         await this.cleanupTempFile(tempFile);
 
@@ -276,47 +276,47 @@ class CodeExecutionService {
    */
   private injectPromptPolyfill(code: string): string {
     const polyfill = `
-// Polyfill de prompt() para Node.js
-const readline = require('readline');
-const rl = readline.createInterface({
-  input: process.stdin,
-  output: process.stdout,
-  terminal: false
-});
+  // Polyfill de prompt() para Node.js
+  const readline = require('readline');
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+    terminal: false
+  });
 
-// Array para almacenar las líneas de input
-const inputLines = [];
-let currentLineIndex = 0;
+  // Array para almacenar las líneas de input
+  const inputLines = [];
+  let currentLineIndex = 0;
 
-// Leer todas las líneas disponibles de stdin
-rl.on('line', (line) => {
-  inputLines.push(line);
-});
+  // Leer todas las líneas disponibles de stdin
+  rl.on('line', (line) => {
+    inputLines.push(line);
+  });
 
-// Función prompt() compatible con browser
-global.prompt = function(message) {
-  if (message) {
-    process.stdout.write(message);
-  }
-  if (currentLineIndex < inputLines.length) {
-    return inputLines[currentLineIndex++];
-  }
-  return null;
-};
+  // Función prompt() compatible con browser
+  global.prompt = function(message) {
+    if (message) {
+      process.stdout.write(message);
+    }
+    if (currentLineIndex < inputLines.length) {
+      return inputLines[currentLineIndex++];
+    }
+    return null;
+  };
 
-// Esperar a que se lean todas las líneas antes de ejecutar el código
-rl.on('close', () => {
-  // Código del usuario comienza aquí
-  try {
-`;
+  // Esperar a que se lean todas las líneas antes de ejecutar el código
+  rl.on('close', () => {
+    // Código del usuario comienza aquí
+    try {
+  `;
 
     const epilog = `
-  } catch (error) {
-    console.error(error.message);
-    process.exit(1);
-  }
-});
-`;
+    } catch (error) {
+      console.error(error.message);
+      process.exit(1);
+    }
+  });
+  `;
 
     return polyfill + code + epilog;
   }
@@ -353,7 +353,7 @@ rl.on('close', () => {
     try {
       // Usar py_compile para validar sintaxis
       const validateScript = `import py_compile; py_compile.compile('${tempFile.replace(/\\/g, '\\\\')}', doraise=True)`;
-      
+
       await execAsync(
         `python -c "${validateScript}"`,
         {
@@ -555,7 +555,7 @@ rl.on('close', () => {
       const executionTime = Date.now() - startTime;
       return {
         output: error.stdout || '',
-        error: error.stderr || error.message,
+        error: err  or.stderr || error.message,
         exitCode: error.code || 1,
         executionTime
       };

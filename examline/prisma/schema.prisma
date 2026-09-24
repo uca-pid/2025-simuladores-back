@@ -90,6 +90,8 @@ model ExamWindow {
   kioskMode     Int           @default(0)
   
   // === Configuración de SEB ===
+  sebUnsafeMode           Boolean @default(false) // Desactiva todas las restricciones (útil para pruebas)
+  
   // Modo y visualización
   sebKioskMode            Int    @default(0)    // 0=normal, 1=kiosk
   sebShowTaskBar          Boolean @default(false)
@@ -112,6 +114,7 @@ model ExamWindow {
   sebEnablePrintScreen    Boolean @default(true)
   sebEnableFunctionKeys   Boolean @default(true)
   sebEnableCtrlEsc        Boolean @default(false)
+  sebEnableTaskManager    Boolean @default(false)
   
   // Seguridad
   sebClipboardPolicy     Int     @default(2)    // 0=permitir todo, 1=bloquear entrada, 2=bloquear todo
@@ -119,6 +122,10 @@ model ExamWindow {
   sebLockOnMessageSocketClose Boolean @default(true)
   sebAllowSwitchToApplications Boolean @default(false)
   sebAllowDeveloperConsole Boolean @default(false)
+  sebAllowZoom            Boolean @default(false)
+  sebAllowTeams           Boolean @default(false)
+  sebBrowserWindowAllowMinimize Boolean @default(false)
+
   
   // Archivos
   sebAllowDownloads       Boolean @default(true)

@@ -13,7 +13,7 @@ const ExamWindowRoute = (prisma: PrismaClient) => {
   const router = Router();
 
   router.post('/', authenticateToken, requireRole(['professor']), async (req, res) => {
-  const { examId, nombre, fechaInicio, duracion, modalidad, cupoMaximo, notas, sinTiempo, usaSEB, kioskMode} = req.body;
+  const { examId, nombre, fechaInicio, duracion, modalidad, cupoMaximo, notas, sinTiempo, usaSEB, kioskMode, sebUnsafeMode, sebAllowZoom, sebAllowTeams, sebBrowserWindowAllowMinimize, sebEnableTaskManager } = req.body;
 
   try {
         const examIdNumber = parseInt(examId);
@@ -80,6 +80,11 @@ const ExamWindowRoute = (prisma: PrismaClient) => {
           notas: notas || null,
           sinTiempo: isSinTiempo,
           usaSEB: Boolean(usaSEB),
+          sebUnsafeMode: Boolean(sebUnsafeMode),
+          sebAllowZoom: Boolean(sebAllowZoom),
+          sebAllowTeams: Boolean(sebAllowTeams),
+          sebBrowserWindowAllowMinimize: Boolean(sebBrowserWindowAllowMinimize),
+          sebEnableTaskManager: Boolean(sebEnableTaskManager),
           kioskMode: kioskMode,
           estado: isSinTiempo ? 'programada' : 'programada'
         };

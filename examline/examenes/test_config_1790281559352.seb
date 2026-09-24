@@ -1,245 +1,39 @@
-import { type PrismaClient } from "@prisma/client";
-import crypto from "crypto";
-
-/**
- * Hashea una contraseña usando SHA-256
- */
-function hashSHA256(text: string): string {
-  return crypto.createHash("sha256").update(text).digest("hex");
-}
-
-/**
- * Interfaz para los parámetros de configuración de SEB
- */
-export interface SEBConfigParams {
-  examId: number;
-  windowId: number;
-  token: string;
-  frontUrl: string;
-  backendUrl: string;
-  quitPassword?: string;
-  settingsPassword?: string;
-}
-
-/**
- * Interfaz para las opciones de configuración del examen
- */
-export interface ExamWindowSEBSettings {
-  // Modo inseguro (sobrescribe restricciones)
-  unsafeMode?: boolean;
-  // Modo kiosk
-  kioskMode: number;
-  // Mostrar barra de tareas
-  showTaskBar: boolean;
-  // Permitir quitter
-  allowQuit: boolean;
-  // Modo navegador (0=normal, 1=kiosk)
-  browserViewMode: number;
-  // Permitir recargar
-  allowReload: boolean;
-  // Permitir barra de direcciones
-  allowAddressBar: boolean;
-  // Permitir botones del navegador
-  enableBrowserWindowToolbar: boolean;
-  // Permitir atrás/adelante del navegador
-  allowBrowsingBackForward: boolean;
-  // Permitir salir con Esc
-  enableEsc: boolean;
-  // Permitir Alt+Tab
-  enableAltTab: boolean;
-  // Permitir Alt+Esc
-  enableAltEsc: boolean;
-  // Permitir Alt+F4
-  enableAltF4: boolean;
-  // Permitir menú inicio
-  enableStartMenu: boolean;
-  // Permitir clic derecho
-  enableRightMouse: boolean;
-  // Permitir imprimir pantalla
-  enablePrintScreen: boolean;
-  // Habilitar teclas de función F1-F12
-  enableFunctionKeys: boolean;
-  // Permitir Zoom
-  allowZoom?: boolean;
-  // Permitir Teams
-  allowTeams?: boolean;
-  // Permitir minimizar la ventana del navegador
-  browserWindowAllowMinimize?: boolean;
-  // Permitir Administrador de Tareas
-  enableTaskManager?: boolean;
-  // Política de portapapeles (0=permitir todo, 1=bloquear entrada, 2=bloquear todo)
-  clipboardPolicy: number;
-  // Crear nuevo escritorio
-  createNewDesktop: boolean;
-  // Bloquear al cerrar socket
-  lockOnMessageSocketClose: boolean;
-  // Permitir cambio de usuario
-  allowSwitchToApplications: boolean;
-  // Permitir desarrollo
-  allowDeveloperConsole: boolean;
-  // Permitir descarga de archivos
-  allowDownloads: boolean;
-  // Permitir subir archivos
-  allowUploads: boolean;
-  // URL de salida
-  quitUrl: string;
-  // Contraseña de salida
-  quitPassword: string;
-  // Contraseña de configuración
-  settingsPassword: string;
-}
-
-/**
- * Obtiene la configuración de SEB para una ventana de examen desde la base de datos
- */
-export async function getExamWindowSEBSettings(
-  prisma: PrismaClient,
-  windowId: number
-): Promise<ExamWindowSEBSettings | null> {
-  const examWindow = await prisma.examWindow.findUnique({
-    where: { id: windowId },
-    include: {
-      exam: true,
-    },
-  });
-
-  if (!examWindow) {
-    return null;
-  }
-
-  // Valores por defecto - leer desde la base de datos
- const defaults: ExamWindowSEBSettings = {
-    unsafeMode: (examWindow as any).sebUnsafeMode ?? false,
-    // Modo kiosk
-    kioskMode: (examWindow as any).sebKioskMode ?? (examWindow.kioskMode || 0),
-    showTaskBar: (examWindow as any).sebShowTaskBar ?? examWindow.kioskMode === 1,
-    allowQuit: (examWindow as any).sebAllowQuit ?? true,
-    browserViewMode: (examWindow as any).sebBrowserViewMode ?? (examWindow.kioskMode || 0),
-    allowReload: (examWindow as any).sebAllowReload ?? true,
-    allowAddressBar: (examWindow as any).sebAllowAddressBar ?? false,
-    enableBrowserWindowToolbar: (examWindow as any).sebEnableBrowserWindowToolbar ?? false,
-    allowBrowsingBackForward: (examWindow as any).sebAllowBrowsingBackForward ?? false,
-    
-    // Teclado
-    enableEsc: (examWindow as any).sebEnableEsc ?? false,
-    enableAltTab: (examWindow as any).sebEnableAltTab ?? false,
-    enableAltEsc: (examWindow as any).sebEnableAltEsc ?? false,
-    enableAltF4: (examWindow as any).sebEnableAltF4 ?? false,
-    enableStartMenu: (examWindow as any).sebEnableStartMenu ?? false,
-    enableRightMouse: (examWindow as any).sebEnableRightMouse ?? true,
-    enablePrintScreen: (examWindow as any).sebEnablePrintScreen ?? true,
-    enableFunctionKeys: (examWindow as any).sebEnableFunctionKeys ?? true,
-    
-    // Seguridad
-    clipboardPolicy: (examWindow as any).sebClipboardPolicy ?? 2,
-    createNewDesktop: (examWindow as any).sebCreateNewDesktop ?? true,
-    lockOnMessageSocketClose: (examWindow as any).sebLockOnMessageSocketClose ?? true,
-    allowSwitchToApplications: (examWindow as any).sebAllowSwitchToApplications ?? false,
-    allowDeveloperConsole: (examWindow as any).sebAllowDeveloperConsole ?? false,
-    
-    // Archivos
-    allowDownloads: (examWindow as any).sebAllowDownloads ?? true,
-    allowUploads: (examWindow as any).sebAllowUploads ?? false,
-    
-    // URLs y contraseñas
-    quitUrl: (examWindow as any).sebQuitUrl ?? "https://ferocarcineto.com.ar/",
-    quitPassword: (examWindow as any).sebQuitPassword ?? "12345",
-    settingsPassword: (examWindow as any).sebSettingsPassword ?? "12345",
-    
-    // Virtual y Ventanas
-    allowZoom: (examWindow as any).sebAllowZoom ?? false,
-    allowTeams: (examWindow as any).sebAllowTeams ?? false,
-    browserWindowAllowMinimize: (examWindow as any).sebBrowserWindowAllowMinimize ?? false,
-    enableTaskManager: (examWindow as any).sebEnableTaskManager ?? false,
-  };
-
-  return defaults;
-}
-
-/**
- * Construye el XML de configuración de SEB basado en las opciones de la base de datos
- */
-export function buildSEBXml(
-  params: SEBConfigParams,
-  settings: ExamWindowSEBSettings
-): string {
-  const { examId, frontUrl, backendUrl, quitPassword, settingsPassword } = params;
-
-  // Hashear contraseñas
-  const hashedQuitPassword = hashSHA256(quitPassword || settings.quitPassword);
-  const hashedSettingsPassword = hashSHA256(settingsPassword || settings.settingsPassword);
-
-  // Escapar URL para XML
-  const escapedFrontUrl = frontUrl.replace(/&/g, "&amp;");
-
-  // Si estamos en unsafeMode, sobrescribir las restricciones
-  if (settings.unsafeMode) {
-    settings.kioskMode = 0;
-    settings.showTaskBar = true;
-    settings.allowQuit = true;
-    settings.enableEsc = true;
-    settings.enableAltTab = true;
-    settings.enableAltEsc = true;
-    settings.enableAltF4 = true;
-    settings.enableStartMenu = true;
-    settings.enableRightMouse = true;
-    settings.allowDeveloperConsole = true;
-    settings.clipboardPolicy = 0;
-    settings.createNewDesktop = false;
-  }
-
-  if (settings.enableTaskManager) {
-    settings.createNewDesktop = false;
-  }
-
-  // Determinar valores basados en configuración
-  const kioskModeValue = settings.kioskMode;
-  const windowsTaskBar = settings.showTaskBar;
-
-  // URL de salida
-  const quitUrl = settings.quitUrl;
-
-  // Construir el XML de SEB
-  const sebPlist = `<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple Computer//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
   <dict>
     <key>sebMode</key>
     <integer>0</integer>
     <key>kioskMode</key>
-    <integer>${kioskModeValue}</integer>
+    <integer>0</integer>
     <key>startURL</key>
-    <string>${escapedFrontUrl}</string>
+    <string>http://localhost:3000/</string>
     <key>allowQuit</key>
-    <${settings.allowQuit ? "true" : "false"} />
+    <true />
     <key>browserViewMode</key>
-    <integer>${settings.browserViewMode}</integer>
+    <integer>0</integer>
+    <key>quitURL</key>
+    <string>https://ferocarcineto.com.ar/</string>
     <key>quitURLConfirm</key>
     <false />
     <key>hashedAdminPassword</key>
-    <string>${hashedSettingsPassword}</string>
+    <string>5994471abb01112afcc18159f6cc74b4f511b99806da59b3caf5a9c173cacfc5</string>
     <key>allowedDisplaysMaxNumber</key>
     <integer>5</integer>
     <key>allowedDisplayBuiltin</key>
     <true />
     <key>browserWindowAllowReload</key>
-    <${settings.allowReload ? "true" : "false"} />
-    <key>browserWindowAllowMinimize</key>
-    <${settings.browserWindowAllowMinimize ? "true" : "false"} />
+    <true />
     <key>showTaskBar</key>
-    <${settings.showTaskBar ? "true" : "false"}/>
+    <true/>
     <key>allowSwitchToApplications</key>
-    <${(settings.allowSwitchToApplications || settings.allowZoom || settings.allowTeams) ? "true" : "false"}/>
+    <true/>
     <key>enableAltEsc</key>
-    <${settings.enableAltEsc ? "true" : "false"} />
+    <true />
     <key>enableAltTab</key>
-    <${settings.enableAltTab ? "true" : "false"} />
-    <key>enableCtrlAltDel</key>
-    <${settings.enableTaskManager ? "true" : "false"} />
-    <key>enableTaskManager</key>
-    <${settings.enableTaskManager ? "true" : "false"} />
+    <true />
     <key>enableEsc</key>
-    <${settings.enableEsc ? "true" : "false"} />
+    <true />
     <key>urlFilterEnable</key>
     <false />
     <key>sebConfigPurpose</key>
@@ -253,7 +47,7 @@ export function buildSEBXml(
     <key>ignoreExitKeys</key>
     <true />
     <key>hashedQuitPassword</key>
-    <string>${hashedQuitPassword}</string>
+    <string>5994471abb01112afcc18159f6cc74b4f511b99806da59b3caf5a9c173cacfc5</string>
     <key>exitKey1</key>
     <integer>2</integer>
     <key>exitKey2</key>
@@ -269,9 +63,9 @@ export function buildSEBXml(
     <key>useAsymmetricOnlyEncryption</key>
     <false />
     <key>browserWindowAllowAddressBar</key>
-    <${settings.allowAddressBar ? "true" : "false"} />
+    <false />
     <key>newBrowserWindowAllowAddressBar</key>
-    <${settings.allowAddressBar ? "true" : "false"} />
+    <false />
     <key>mainBrowserWindowWidth</key>
     <string>100%</string>
     <key>mainBrowserWindowHeight</key>
@@ -279,9 +73,9 @@ export function buildSEBXml(
     <key>mainBrowserWindowPositioning</key>
     <integer>1</integer>
     <key>enableBrowserWindowToolbar</key>
-    <${settings.enableBrowserWindowToolbar ? "true" : "false"} />
+    <false />
     <key>hideBrowserWindowToolbar</key>
-    <${windowsTaskBar ? "true" : "false"} />
+    <true />
     <key>showMenuBar</key>
     <false />
     <key>showSideMenu</key>
@@ -305,7 +99,7 @@ export function buildSEBXml(
     <key>additionalDictionaries</key>
     <array></array>
     <key>showReloadButton</key>
-    <${settings.allowReload ? "true" : "false"} />
+    <true />
     <key>showTime</key>
     <true />
     <key>showInputLanguage</key>
@@ -323,7 +117,7 @@ export function buildSEBXml(
     <key>audioSetVolumeLevel</key>
     <false />
     <key>allowDeveloperConsole</key>
-    <${settings.allowDeveloperConsole ? "true" : "false"} />
+    <true />
     <key>batteryChargeThresholdCritical</key>
     <real>0.1</real>
     <key>batteryChargeThresholdLow</key>
@@ -361,7 +155,7 @@ export function buildSEBXml(
     <key>allowAudioCapture</key>
     <false />
     <key>allowBrowsingBackForward</key>
-    <${settings.allowBrowsingBackForward ? "true" : "false"} />
+    <false />
     <key>newBrowserWindowNavigation</key>
     <true />
     <key>removeBrowserProfile</key>
@@ -371,9 +165,9 @@ export function buildSEBXml(
     <key>enableSebBrowser</key>
     <true />
     <key>newBrowserWindowAllowReload</key>
-    <${settings.allowReload ? "true" : "false"} />
+    <true />
     <key>showReloadWarning</key>
-    <${settings.allowReload ? "true" : "false"} />
+    <true />
     <key>newBrowserWindowShowReloadWarning</key>
     <false />
     <key>browserUserAgentWinDesktopMode</key>
@@ -423,9 +217,9 @@ export function buildSEBXml(
     <key>browserShowFileSystemElementPath</key>
     <true />
     <key>allowDownloads</key>
-    <${settings.allowDownloads ? "true" : "false"} />
+    <true />
     <key>allowUploads</key>
-    <${settings.allowUploads ? "true" : "false"} />
+    <false />
     <key>examKeySalt</key>
     <data>8PApcp1uLg+UzlJ+zy8ErtclLF3/FNZ8+xsb/9wjeOc=</data>
     <key>examSessionClearCookiesOnEnd</key>
@@ -439,7 +233,7 @@ export function buildSEBXml(
     <key>sendBrowserExamKey</key>
     <false />
     <key>quitURL</key>
-    <string>${quitUrl}</string>
+    <string>https://ferocarcineto.com.ar/</string>
     <key>restartExamURL</key>
     <string />
     <key>restartExamUseStartURL</key>
@@ -1699,9 +1493,9 @@ export function buildSEBXml(
     <key>allowScreenSharing</key>
     <true />
     <key>enablePrivateClipboard</key>
-    <${settings.clipboardPolicy === 0 ? "false" : "true"} />
+    <false />
     <key>createNewDesktop</key>
-    <${settings.createNewDesktop ? "true" : "false"} />
+    <true />
     <key>killExplorerShell</key>
     <false />
     <key>enableLogging</key>
@@ -1717,7 +1511,7 @@ export function buildSEBXml(
     <key>allowWlan</key>
     <false />
     <key>lockOnMessageSocketClose</key>
-    <${settings.lockOnMessageSocketClose ? "true" : "false"} />
+    <true />
     <key>minMacOSVersion</key>
     <integer>4</integer>
     <key>enableAppSwitcherCheck</key>
@@ -1743,7 +1537,7 @@ export function buildSEBXml(
     <key>enableWindowsUpdate</key>
     <false />
     <key>clipboardPolicy</key>
-    <integer>${settings.clipboardPolicy}</integer>
+    <integer>0</integer>
     <key>disableSessionChangeLockScreen</key>
     <false />
     <key>enableCursorVerification</key>
@@ -1761,7 +1555,7 @@ export function buildSEBXml(
     <key>insideSebEnableChangeAPassword</key>
     <false />
     <key>insideSebEnableStartTaskManager</key>
-    <${settings.enableTaskManager ? "true" : "false"} />
+    <false />
     <key>insideSebEnableLogOff</key>
     <false />
     <key>insideSebEnableShutDown</key>
@@ -1781,136 +1575,44 @@ export function buildSEBXml(
     <key>enableCtrlEsc</key>
     <false />
     <key>enableAltF4</key>
-    <${settings.enableAltF4 ? "true" : "false"} />
+    <true />
     <key>enableStartMenu</key>
-    <${settings.enableStartMenu ? "true" : "false"} />
+    <true />
     <key>enableMiddleMouse</key>
     <false />
     <key>enableRightMouse</key>
-    <${settings.enableRightMouse ? "true" : "false"} />
+    <true />
     <key>enablePrintScreen</key>
-    <${settings.enablePrintScreen ? "true" : "false"} />
+    <true />
     <key>enableAltMouseWheel</key>
     <false />
     <key>enableF1</key>
-    <${settings.enableFunctionKeys ? "true" : "false"} />
+    <true />
     <key>enableF2</key>
-    <${settings.enableFunctionKeys ? "true" : "false"} />
+    <true />
     <key>enableF3</key>
-    <${settings.enableFunctionKeys ? "true" : "false"} />
+    <true />
     <key>enableF4</key>
-    <${settings.enableFunctionKeys ? "true" : "false"} />
+    <true />
     <key>enableF5</key>
-    <${settings.enableFunctionKeys ? "true" : "false"} />
+    <true />
     <key>enableF6</key>
-    <${settings.enableFunctionKeys ? "true" : "false"} />
+    <true />
     <key>enableF7</key>
-    <${settings.enableFunctionKeys ? "true" : "false"} />
+    <true />
     <key>enableF8</key>
-    <${settings.enableFunctionKeys ? "true" : "false"} />
+    <true />
     <key>enableF9</key>
-    <${settings.enableFunctionKeys ? "true" : "false"} />
+    <true />
     <key>enableF10</key>
-    <${settings.enableFunctionKeys ? "true" : "false"} />
+    <true />
     <key>enableF11</key>
-    <${settings.enableFunctionKeys ? "true" : "false"} />
+    <true />
     <key>enableF12</key>
-    <${settings.enableFunctionKeys ? "true" : "false"} />
+    <true />
     <key>displayAlwaysOn</key>
     <true />
     <key>systemAlwaysOn</key>
     <true />
-    ${(settings.allowZoom || settings.allowTeams || settings.enableTaskManager) ? `
-    <key>permittedApplications</key>
-    <array>
-      ${settings.enableTaskManager ? `
-      <dict>
-        <key>active</key><true/>
-        <key>allowUserToChooseApp</key><false/>
-        <key>allowedExecutableMac</key><string>Activity Monitor.app</string>
-        <key>allowedExecutableWin</key><string>taskmgr.exe</string>
-        <key>description</key><string>Task Manager</string>
-        <key>executable</key><string>taskmgr.exe</string>
-        <key>identifier</key><string>TaskManager</string>
-        <key>originalName</key><string>taskmgr.exe</string>
-        <key>os</key><integer>1</integer>
-        <key>title</key><string>Task Manager</string>
-      </dict>
-      ` : ''}
-      ${settings.allowZoom ? `
-      <dict>
-        <key>active</key><true/>
-        <key>allowUserToChooseApp</key><false/>
-        <key>allowedExecutableMac</key><string>zoom.us.app</string>
-        <key>allowedExecutableWin</key><string>Zoom.exe</string>
-        <key>description</key><string>Zoom</string>
-        <key>executable</key><string>Zoom.exe</string>
-        <key>identifier</key><string>Zoom</string>
-        <key>originalName</key><string>Zoom.exe</string>
-        <key>os</key><integer>1</integer>
-        <key>title</key><string>Zoom</string>
-      </dict>
-      ` : ''}
-      ${settings.allowTeams ? `
-      <dict>
-        <key>active</key><true/>
-        <key>allowUserToChooseApp</key><false/>
-        <key>allowedExecutableMac</key><string>Microsoft Teams.app</string>
-        <key>allowedExecutableWin</key><string>Teams.exe</string>
-        <key>description</key><string>Microsoft Teams</string>
-        <key>executable</key><string>Teams.exe</string>
-        <key>identifier</key><string>Teams</string>
-        <key>originalName</key><string>Teams.exe</string>
-        <key>os</key><integer>1</integer>
-        <key>title</key><string>Teams</string>
-      </dict>
-      <dict>
-        <key>active</key><true/>
-        <key>allowUserToChooseApp</key><false/>
-        <key>allowedExecutableMac</key><string>Microsoft Teams.app</string>
-        <key>allowedExecutableWin</key><string>ms-teams.exe</string>
-        <key>description</key><string>Microsoft Teams (New)</string>
-        <key>executable</key><string>ms-teams.exe</string>
-        <key>identifier</key><string>Teams New</string>
-        <key>originalName</key><string>ms-teams.exe</string>
-        <key>os</key><integer>1</integer>
-        <key>title</key><string>Teams New</string>
-      </dict>
-      ` : ''}
-    </array>` : ''}
   </dict>
-</plist>`;
-
-  return sebPlist;
-}
-
-/**
- * Actualiza la configuración de SEB para una ventana de examen
- */
-export async function updateExamWindowSEBSettings(
-  prisma: PrismaClient,
-  windowId: number,
-  settings: Partial<ExamWindowSEBSettings>
-): Promise<boolean> {
-  try {
-    // Mapear las configuraciones a campos del modelo
-    const updateData: any = {};
-
-    if (settings.kioskMode !== undefined) {
-      updateData.kioskMode = settings.kioskMode;
-    }
-
-    // Aquí puedes agregar más campos según sea necesario
-    // Por ejemplo, si agregas más campos a ExamWindow en el schema.prisma
-
-    await prisma.examWindow.update({
-      where: { id: windowId },
-      data: updateData,
-    });
-
-    return true;
-  } catch (error) {
-    console.error("Error updating SEB settings:", error);
-    return false;
-  }
-}
+</plist>
