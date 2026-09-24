@@ -1,8 +1,7 @@
 import { type PrismaClient } from "@prisma/client";
 import { Router } from "express";
 import multer from "multer";
-import path from "path";
-import fs from "fs";
+import { v2 as cloudinary } from "cloudinary";
 import { authenticateToken, requireRole, requireOwnership } from "../middleware/auth.ts";
 import CodeExecutionService from "../services/codeExecution.service.ts";
 import {
@@ -14,11 +13,19 @@ import {
   saveReferenceSolution
 } from "../services/exam.service.ts";
 
-const UPLOADS_DIR = path.join(process.cwd(), "uploads", "enunciados");
-fs.mkdirSync(UPLOADS_DIR, { recursive: true });
-
-const DATASETS_DIR = path.join(process.cwd(), "uploads", "datasets");
-fs.mkdirSync(DATASETS_DIR, { recursive: true });
+// CLOUDINARY_URL en el .env configura el SDK automáticamente
+const uploadToCloudinary = (buffer: Buffer, folder: string, publicId: string): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(
+      { resource_type: "raw", folder, public_id: publicId },
+      (err, result) => {
+        if (err || !result) return reject(err);
+        resolve(result.secure_url);
+      }
+    );
+    stream.end(buffer);
+  });
+};
 
 const ALLOWED_MIME_TYPES: Record<string, string> = {
   "application/pdf": ".pdf",
@@ -26,13 +33,7 @@ const ALLOWED_MIME_TYPES: Record<string, string> = {
 };
 
 const enunciadoUpload = multer({
-  storage: multer.diskStorage({
-    destination: (_req, _file, cb) => cb(null, UPLOADS_DIR),
-    filename: (_req, file, cb) => {
-      const ext = ALLOWED_MIME_TYPES[file.mimetype];
-      cb(null, `${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`);
-    }
-  }),
+  storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
   fileFilter: (_req, file, cb) => {
     if (ALLOWED_MIME_TYPES[file.mimetype]) {
@@ -48,13 +49,7 @@ const enunciadoUpload = multer({
 const ALLOWED_DATASET_EXTENSION = /\.(csv|txt)$/i;
 
 const datasetUpload = multer({
-  storage: multer.diskStorage({
-    destination: (_req, _file, cb) => cb(null, DATASETS_DIR),
-    filename: (_req, file, cb) => {
-      const ext = file.originalname.toLowerCase().endsWith('.txt') ? '.txt' : '.csv';
-      cb(null, `${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`);
-    }
-  }),
+  storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
   fileFilter: (_req, file, cb) => {
     if (ALLOWED_DATASET_EXTENSION.test(file.originalname)) {
@@ -76,7 +71,7 @@ const ExamRoute = (prisma: PrismaClient) => {
     authenticateToken,
     requireRole(['professor']),
     (req, res) => {
-      enunciadoUpload.single("archivo")(req, res, (err: any) => {
+      enunciadoUpload.single("archivo")(req, res, async (err: any) => {
         if (err) {
           const message = err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE'
             ? "El archivo supera el tamaño máximo permitido (10MB)"
@@ -88,10 +83,19 @@ const ExamRoute = (prisma: PrismaClient) => {
           return res.status(400).json({ error: "Debe adjuntar un archivo" });
         }
 
-        res.status(201).json({
-          url: `/uploads/enunciados/${req.file.filename}`,
-          nombre: req.file.originalname
-        });
+        try {
+          const ext = ALLOWED_MIME_TYPES[req.file.mimetype];
+          const publicId = `${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`;
+          const url = await uploadToCloudinary(req.file.buffer, "enunciados", publicId);
+
+          res.status(201).json({
+            url,
+            nombre: req.file.originalname
+          });
+        } catch (uploadErr) {
+          console.error('Error subiendo a Cloudinary:', uploadErr);
+          res.status(500).json({ error: "Error al subir el archivo al storage" });
+        }
       });
     }
   );
@@ -104,7 +108,7 @@ const ExamRoute = (prisma: PrismaClient) => {
     authenticateToken,
     requireRole(['professor']),
     (req, res) => {
-      datasetUpload.single("archivo")(req, res, (err: any) => {
+      datasetUpload.single("archivo")(req, res, async (err: any) => {
         if (err) {
           const message = err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE'
             ? "El archivo supera el tamaño máximo permitido (5MB)"
@@ -116,10 +120,19 @@ const ExamRoute = (prisma: PrismaClient) => {
           return res.status(400).json({ error: "Debe adjuntar un archivo" });
         }
 
-        res.status(201).json({
-          url: `/uploads/datasets/${req.file.filename}`,
-          nombre: req.file.originalname
-        });
+        try {
+          const ext = req.file.originalname.toLowerCase().endsWith('.txt') ? '.txt' : '.csv';
+          const publicId = `${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`;
+          const url = await uploadToCloudinary(req.file.buffer, "datasets", publicId);
+
+          res.status(201).json({
+            url,
+            nombre: req.file.originalname
+          });
+        } catch (uploadErr) {
+          console.error('Error subiendo a Cloudinary:', uploadErr);
+          res.status(500).json({ error: "Error al subir el archivo al storage" });
+        }
       });
     }
   );

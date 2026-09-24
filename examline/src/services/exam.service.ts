@@ -4,11 +4,13 @@ import path from "path";
 import CodeExecutionService from "./codeExecution.service.ts";
 
 /**
- * Lee del disco todos los archivos de dataset asociados a un examen (si tiene),
+ * Descarga todos los archivos de dataset asociados a un examen (si tiene),
  * para poder dejarlos junto al código durante la ejecución (ver
  * CodeExecutionService.executeCode / DatasetFile). Soporta tanto el array
  * nuevo `datasetFiles` como, por compatibilidad con exámenes creados antes de
  * esta función, el par legacy `datasetCsvUrl`/`datasetCsvNombre` (un solo archivo).
+ * Las urls pueden ser absolutas (Cloudinary) o rutas relativas heredadas de
+ * cuando los archivos se guardaban en disco local.
  */
 export async function loadExamDatasets(exam: {
   datasetFiles?: unknown;
@@ -27,8 +29,15 @@ export async function loadExamDatasets(exam: {
   const datasets = await Promise.all(
     allEntries.map(async ({ url, nombre }) => {
       try {
-        const filePath = path.join(process.cwd(), url.replace(/^\/+/, ""));
-        const content = await readFile(filePath, "utf-8");
+        let content: string;
+        if (/^https?:\/\//i.test(url)) {
+          const response = await fetch(url);
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          content = await response.text();
+        } else {
+          const filePath = path.join(process.cwd(), url.replace(/^\/+/, ""));
+          content = await readFile(filePath, "utf-8");
+        }
         return { name: nombre, content };
       } catch (err) {
         console.error(`No se pudo leer el dataset "${nombre}" del examen:`, err);
