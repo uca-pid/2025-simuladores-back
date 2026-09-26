@@ -55,7 +55,7 @@ describe("ExamAttemptRoute", () => {
         examWindow: { activa: true, estado: "programada", sinTiempo: true },
       });
       prismaMock.examAttempt.findFirst.mockResolvedValue(null);
-      prismaMock.exam.findUnique.mockResolvedValue({ id: 1, ordenAleatorio: false, preguntas: [] });
+      prismaMock.exam.findUnique.mockResolvedValue({ id: 1, ordenAleatorio: false, partes: [] });
       prismaMock.examAttempt.create.mockResolvedValue({ id: 1, userId: 1, examId: 1, estado: "en_progreso" });
 
       const res = await request(app)

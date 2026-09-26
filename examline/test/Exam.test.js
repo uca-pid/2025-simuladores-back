@@ -10,7 +10,16 @@ const prismaMock = {
     create: jest.fn(),
     findMany: jest.fn(),
     findUnique: jest.fn(),
+    findUniqueOrThrow: jest.fn(),
     update: jest.fn(),
+  },
+  examPart: {
+    create: jest.fn(),
+    findUnique: jest.fn(),
+    update: jest.fn(),
+  },
+  pregunta: {
+    createMany: jest.fn(),
   },
   examFile: {
     upsert: jest.fn(),
@@ -22,6 +31,9 @@ const prismaMock = {
     upsert: jest.fn(),
   },
 };
+// createExam corre dentro de una transacción; el mock simplemente ejecuta el
+// callback pasándole el mismo prismaMock como cliente transaccional (tx).
+prismaMock.$transaction = jest.fn((callback) => callback(prismaMock));
 
 // Mock authentication middleware
 jest.mock('../src/middleware/auth', () => ({
@@ -52,20 +64,28 @@ describe('ExamRoute tests', () => {
 
   // ================= POST /create =================
   it('POST /create should create multiple choice exam', async () => {
-    prismaMock.exam.create.mockResolvedValue({
+    prismaMock.exam.create.mockResolvedValue({ id: 1, profesorId: 1 });
+    prismaMock.examPart.create.mockResolvedValue({ id: 10 });
+    prismaMock.pregunta.createMany.mockResolvedValue({ count: 1 });
+    prismaMock.exam.findUniqueOrThrow.mockResolvedValue({
       id: 1,
       titulo: 'Test Exam',
       tipo: 'multiple_choice',
-      preguntas: [{ id: 1, texto: 'Q1' }],
       profesorId: 1,
+      partes: [{ id: 10, orden: 1, tipo: 'multiple_choice', preguntas: [{ id: 1, texto: 'Q1' }] }],
     });
 
     const res = await request(app)
       .post('/exams/create')
       .send({
         titulo: 'Test Exam',
-        tipo: 'multiple_choice',
-        preguntas: [{ texto: 'Q1', correcta: true, opciones: ['a', 'b'] }],
+        partes: [
+          {
+            orden: 1,
+            tipo: 'multiple_choice',
+            preguntas: [{ texto: 'Q1', correcta: 0, opciones: ['a', 'b'] }],
+          },
+        ],
       });
 
     expect(res.statusCode).toBe(201);
@@ -76,18 +96,21 @@ describe('ExamRoute tests', () => {
   it('POST /create should fail if programming exam missing language', async () => {
     const res = await request(app)
       .post('/exams/create')
-      .send({ titulo: 'Prog Exam', tipo: 'programming' });
+      .send({ titulo: 'Prog Exam', partes: [{ orden: 1, tipo: 'programming' }] });
 
     expect(res.statusCode).toBe(400);
     expect(res.body.error).toMatch(/lenguaje/);
   });
 
   it('POST /create should create programming exam with reference files', async () => {
-    prismaMock.exam.create.mockResolvedValue({
+    prismaMock.exam.create.mockResolvedValue({ id: 2, profesorId: 1 });
+    prismaMock.examPart.create.mockResolvedValue({ id: 20 });
+    prismaMock.exam.findUniqueOrThrow.mockResolvedValue({
       id: 2,
       titulo: 'Prog Exam',
       tipo: 'programming',
       profesorId: 1,
+      partes: [{ id: 20, orden: 1, tipo: 'programming', preguntas: [] }],
     });
 
     prismaMock.examFile.upsert.mockResolvedValue({});
@@ -96,9 +119,14 @@ describe('ExamRoute tests', () => {
       .post('/exams/create')
       .send({
         titulo: 'Prog Exam',
-        tipo: 'programming',
-        lenguajeProgramacion: 'python',
-        enunciadoProgramacion: 'Do something',
+        partes: [
+          {
+            orden: 1,
+            tipo: 'programming',
+            lenguajeProgramacion: 'python',
+            enunciadoProgramacion: 'Do something',
+          },
+        ],
         referenceFiles: [
           { filename: 'solution.py', content: 'print("hi")' },
         ],
@@ -110,7 +138,7 @@ describe('ExamRoute tests', () => {
 
   // ================= GET / =================
   it('GET / should return exams for professor', async () => {
-    prismaMock.exam.findMany.mockResolvedValue([{ id: 1, titulo: 'Exam1', preguntas: [] }]);
+    prismaMock.exam.findMany.mockResolvedValue([{ id: 1, titulo: 'Exam1', partes: [] }]);
 
     const res = await request(app).get('/exams');
     expect(res.statusCode).toBe(200);
@@ -124,7 +152,7 @@ describe('ExamRoute tests', () => {
       id: 1,
       tipo: 'multiple_choice',
       profesorId: 1,
-      preguntas: [],
+      partes: [],
     });
 
     const res = await request(app).get('/exams/1');
@@ -132,21 +160,21 @@ describe('ExamRoute tests', () => {
     expect(res.body.id).toBe(1);
   });
 
-  // ================= POST /:id/test-solution =================
-  it('POST /:id/test-solution should run tests for programming exam', async () => {
-    prismaMock.exam.findUnique.mockResolvedValue({
-      id: 1,
+  // ================= POST /parts/:partId/test-solution =================
+  it('POST /parts/:partId/test-solution should run tests for programming exam', async () => {
+    prismaMock.examPart.findUnique.mockResolvedValue({
+      id: 10,
       tipo: 'programming',
-      profesorId: 1,
       testCases: [{ input: '1+1', expectedOutput: '2' }],
       lenguajeProgramacion: 'python',
       solucionReferencia: 'print(2)',
+      exam: { profesorId: 1 },
     });
 
     mockRunTests.mockResolvedValue({ score: 100, passedTests: 1, totalTests: 1 });
 
     const res = await request(app)
-      .post('/exams/1/test-solution')
+      .post('/exams/parts/10/test-solution')
       .send({ useReferenceSolution: true });
 
     expect(res.statusCode).toBe(200);
@@ -171,25 +199,25 @@ describe('ExamRoute tests', () => {
     expect(mockRunTests).toHaveBeenCalled();
   });
 
-  // ================= PUT /:id/reference-solution =================
-  it('PUT /:id/reference-solution should update reference solution', async () => {
-    prismaMock.exam.findUnique.mockResolvedValue({
-      id: 1,
+  // ================= PUT /parts/:partId/reference-solution =================
+  it('PUT /parts/:partId/reference-solution should update reference solution', async () => {
+    prismaMock.examPart.findUnique.mockResolvedValue({
+      id: 10,
       tipo: 'programming',
-      profesorId: 1,
+      exam: { profesorId: 1 },
     });
 
-    prismaMock.exam.update.mockResolvedValue({
-      id: 1,
+    prismaMock.examPart.update.mockResolvedValue({
+      id: 10,
       solucionReferencia: 'print(2)',
     });
 
     const res = await request(app)
-      .put('/exams/1/reference-solution')
+      .put('/exams/parts/10/reference-solution')
       .send({ solucionReferencia: 'print(2)' });
 
     expect(res.statusCode).toBe(200);
     expect(res.body.success).toBe(true);
-    expect(prismaMock.exam.update).toHaveBeenCalled();
+    expect(prismaMock.examPart.update).toHaveBeenCalled();
   });
 });
