@@ -8,6 +8,8 @@ import {
   prepareMultipleChoiceFinishData,
   getExamFilesForResults,
   getExamFilesForProfessorView,
+  advancePart,
+  continueToNextPart,
 } from "../services/examAttempt.service.ts";
 
 const ExamAttemptRoute = (prisma: PrismaClient) => {
@@ -103,7 +105,7 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
       // Verificar que el intento pertenece al usuario
       const attempt = await prisma.examAttempt.findUnique({
         where: { id: attemptId },
-        include: { exam: true }
+        include: { exam: { include: { partes: true } } }
       });
 
       if (!attempt) {
@@ -118,17 +120,26 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
         return res.status(400).json({ error: "El intento ya fue finalizado" });
       }
 
+      // Ruta legacy (mantenida por compatibilidad con exámenes de una sola parte,
+      // que fueron creados/migrados con una única ExamPart). Los exámenes de
+      // varias partes deben usar /advance-part y /continue-part.
+      const primeraParte = attempt.exam.partes.find(p => p.orden === 1) || attempt.exam.partes[0];
+      if (!primeraParte) {
+        return res.status(400).json({ error: "El examen no tiene partes configuradas" });
+      }
+
       // Preparar datos de actualización
       const updateData: any = {
         finishedAt: new Date(),
         estado: "finalizado"
       };
 
-      // Agregar datos específicos según el tipo de examen
-      if (attempt.exam.tipo === 'programming') {
+      // Agregar datos específicos según el tipo de la parte
+      if (primeraParte.tipo === 'programming') {
         const result = await prepareProgrammingFinishData(prisma, {
           examId: attempt.examId,
-          userId
+          userId,
+          partId: primeraParte.id
         });
 
         if (result.error) {
@@ -136,8 +147,8 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
         }
 
         Object.assign(updateData, result.updateData);
-      } else if (attempt.exam.tipo === 'multiple_choice') {
-        const mcData = await prepareMultipleChoiceFinishData(prisma, attemptId, attempt.examId, respuestas);
+      } else if (primeraParte.tipo === 'multiple_choice') {
+        const mcData = await prepareMultipleChoiceFinishData(prisma, attemptId, primeraParte.id, respuestas);
         Object.assign(updateData, mcData);
       }
 
@@ -151,6 +162,56 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
     } catch (error) {
       console.error('Error finishing exam attempt:', error);
       res.status(500).json({ error: "Error finalizando intento de examen" });
+    }
+  });
+
+  // POST /exam-attempts/:attemptId/advance-part - Cierra la parte en curso y avanza
+  // (o finaliza el intento si era la última parte). El body lleva las respuestas
+  // (multiple choice) de la parte en curso; para programación se usa el archivo
+  // guardado vía /exam-files (igual que el flujo legacy de finish).
+  router.post("/:attemptId/advance-part", authenticateToken, requireRole(['student']), async (req, res) => {
+    const attemptId = parseInt(req.params.attemptId);
+    const userId = req.user!.userId;
+
+    if (isNaN(attemptId)) {
+      return res.status(400).json({ error: "ID de intento inválido" });
+    }
+
+    try {
+      const result = await advancePart(prisma, attemptId, userId, req.body || {});
+
+      if (result.error) {
+        return res.status(result.error.status).json({ error: result.error.error });
+      }
+
+      res.json(result.attempt);
+    } catch (error) {
+      console.error('Error advancing exam part:', error);
+      res.status(500).json({ error: "Error avanzando de parte" });
+    }
+  });
+
+  // POST /exam-attempts/:attemptId/continue-part - Confirma el paso a la
+  // siguiente parte tras el estado "esperando_continuar" dejado por advance-part.
+  router.post("/:attemptId/continue-part", authenticateToken, requireRole(['student']), async (req, res) => {
+    const attemptId = parseInt(req.params.attemptId);
+    const userId = req.user!.userId;
+
+    if (isNaN(attemptId)) {
+      return res.status(400).json({ error: "ID de intento inválido" });
+    }
+
+    try {
+      const result = await continueToNextPart(prisma, attemptId, userId);
+
+      if (result.error) {
+        return res.status(result.error.status).json({ error: result.error.error });
+      }
+
+      res.json(result.attempt);
+    } catch (error) {
+      console.error('Error continuing to next exam part:', error);
+      res.status(500).json({ error: "Error continuando a la siguiente parte" });
     }
   });
 
@@ -242,7 +303,7 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
         where: { id: attemptId },
         include: {
           exam: {
-            include: { preguntas: true }
+            include: { partes: { include: { preguntas: true }, orderBy: { orden: 'asc' } } }
           },
           examWindow: true,
           respuestas: true // Incluir respuestas del nuevo modelo
@@ -269,9 +330,9 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
         respuestasLegacy[resp.preguntaId] = resp.valor;
       });
 
-      // Si es un examen de programación, incluir archivos guardados
+      // Si alguna parte es de programación, incluir archivos guardados
       let examFiles: any[] = [];
-      if (attempt.exam.tipo === 'programming') {
+      if (attempt.exam.partes.some(p => p.tipo === 'programming')) {
         examFiles = await getExamFilesForResults(prisma, attempt.examId, userId);
       }
 
@@ -341,7 +402,7 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
               id: true,
               titulo: true,
               tipo: true,
-              lenguajeProgramacion: true
+              partes: { select: { lenguajeProgramacion: true }, orderBy: { orden: 'asc' } }
             }
           }
         },
@@ -372,7 +433,7 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
         include: {
           exam: {
             include: {
-              preguntas: true
+              partes: { include: { preguntas: true }, orderBy: { orden: 'asc' } }
             }
           },
           examWindow: true,
@@ -395,11 +456,11 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
         return res.status(403).json({ error: "No autorizado para ver este intento" });
       }
 
-      // Si es un examen de programación, incluir archivos guardados (ambas versiones)
+      // Si alguna parte es de programación, incluir archivos guardados (ambas versiones)
       let manualFiles: any[] = [];
       let submissionFiles: any[] = [];
 
-      if (attempt.exam.tipo === 'programming') {
+      if (attempt.exam.partes.some(p => p.tipo === 'programming')) {
         const files = await getExamFilesForProfessorView(prisma, attempt.examId, attempt.userId);
         manualFiles = files.manualFiles;
         submissionFiles = files.submissionFiles;

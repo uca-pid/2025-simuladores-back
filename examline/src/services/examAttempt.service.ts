@@ -83,7 +83,7 @@ export async function findOrCreateAttempt(
   // Obtener el examen para verificar si tiene orden aleatorio
   const exam = await prisma.exam.findUnique({
     where: { id: examId },
-    include: { preguntas: true }
+    include: { partes: { include: { preguntas: true }, orderBy: { orden: 'asc' } } }
   });
 
   if (!exam) {
@@ -99,10 +99,14 @@ export async function findOrCreateAttempt(
     estado: "en_progreso"
   };
 
+  // Todas las preguntas de todas las partes (el orden aleatorio se mezcla dentro
+  // de cada parte por separado, preservando el orden de las partes).
+  const allPreguntas = exam.partes.flatMap(p => p.preguntas);
+
   // Si el examen tiene orden aleatorio, generar y guardar el orden randomizado
-  if (exam.ordenAleatorio && exam.preguntas && exam.preguntas.length > 0) {
+  if (exam.ordenAleatorio && allPreguntas.length > 0) {
     // Crear array de IDs y randomizar usando Fisher-Yates
-    const preguntaIds = exam.preguntas.map(p => p.id);
+    const preguntaIds = allPreguntas.map(p => p.id);
     for (let i = preguntaIds.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       [preguntaIds[i], preguntaIds[j]] = [preguntaIds[j], preguntaIds[i]];
@@ -213,16 +217,16 @@ export interface ProgrammingFinishResult {
  */
 export async function prepareProgrammingFinishData(
   prisma: PrismaClient,
-  attempt: { examId: number; userId: number }
+  attempt: { examId: number; userId: number; partId: number }
 ): Promise<ProgrammingFinishResult> {
   // 🔒 Obtener el archivo principal guardado manualmente
   // Convención: main.py (Python) o main.js (JavaScript)
-  const exam = await prisma.exam.findUnique({
-    where: { id: attempt.examId }
+  const exam = await prisma.examPart.findUnique({
+    where: { id: attempt.partId }
   });
 
   if (!exam) {
-    return { error: { status: 404, error: "Examen no encontrado" } };
+    return { error: { status: 404, error: "Parte de examen no encontrada" } };
   }
 
   // Determinar el nombre del archivo principal según el lenguaje
@@ -278,7 +282,7 @@ export async function prepareProgrammingFinishData(
 export async function prepareMultipleChoiceFinishData(
   prisma: PrismaClient,
   attemptId: number,
-  examId: number,
+  partId: number,
   respuestas: any
 ): Promise<any> {
   const updateData: any = {};
@@ -298,19 +302,19 @@ export async function prepareMultipleChoiceFinishData(
     });
   }
 
-  // Calcular puntaje automáticamente
-  const exam = await prisma.exam.findUnique({
-    where: { id: examId },
+  // Calcular puntaje automáticamente (solo sobre las preguntas de esta parte)
+  const parte = await prisma.examPart.findUnique({
+    where: { id: partId },
     include: { preguntas: true }
   });
 
-  if (exam && exam.preguntas && exam.preguntas.length > 0) {
+  if (parte && parte.preguntas && parte.preguntas.length > 0) {
     let correctas = 0;
-    const totalPreguntas = exam.preguntas.length;
+    const totalPreguntas = parte.preguntas.length;
 
     // IMPORTANTE: Las respuestas ahora vienen con preguntaId como key (no índice)
     // para soportar orden aleatorio de preguntas
-    exam.preguntas.forEach((pregunta) => {
+    parte.preguntas.forEach((pregunta) => {
       const respuestaEstudiante = respuestas?.[pregunta.id];
 
       if (respuestaEstudiante === undefined || respuestaEstudiante === null) {
@@ -397,6 +401,188 @@ export async function prepareMultipleChoiceFinishData(
   }
 
   return updateData;
+}
+
+export interface PartAdvanceError {
+  status: number;
+  error: string;
+}
+
+/**
+ * Verifica que el intento exista, pertenezca al usuario, y que la ventana
+ * (si tiene tiempo) siga vigente. Devuelve el intento con exam+partes+examWindow.
+ */
+async function loadAttemptForPartTransition(
+  prisma: PrismaClient,
+  attemptId: number,
+  userId: number
+) {
+  const attempt = await prisma.examAttempt.findUnique({
+    where: { id: attemptId },
+    include: {
+      exam: { include: { partes: { include: { preguntas: true }, orderBy: { orden: 'asc' } } } },
+      examWindow: true
+    }
+  });
+
+  if (!attempt) {
+    return { error: { status: 404, error: "Intento no encontrado" } as PartAdvanceError };
+  }
+
+  if (attempt.userId !== userId) {
+    return { error: { status: 403, error: "No autorizado" } as PartAdvanceError };
+  }
+
+  if (attempt.examWindow && !attempt.examWindow.sinTiempo) {
+    const now = new Date();
+    const startDate = new Date(attempt.examWindow.fechaInicio!);
+    const endDate = new Date(startDate.getTime() + (attempt.examWindow.duracion! * 60 * 1000));
+    if (attempt.examWindow.estado !== 'en_curso' || now < startDate || now > endDate) {
+      return { error: { status: 403, error: "El examen no está disponible en este momento" } as PartAdvanceError };
+    }
+  }
+
+  return { attempt };
+}
+
+/**
+ * Avanza el intento: valida que la parte en curso esté completa (todas sus
+ * preguntas multiple_choice respondidas, o el archivo principal guardado para
+ * programación vía prepareProgrammingFinishData) y, según si es la última
+ * parte, finaliza el intento completo o lo deja a la espera de "continuar".
+ *
+ * El índice de parte SIEMPRE se deriva de currentPartIndex en servidor —
+ * nunca se confía en un índice provisto por el cliente, para que un
+ * estudiante no pueda saltar partes ni reabrir una ya cerrada.
+ */
+export async function advancePart(
+  prisma: PrismaClient,
+  attemptId: number,
+  userId: number,
+  body: { respuestas?: any; codigoProgramacion?: string }
+) {
+  const loaded = await loadAttemptForPartTransition(prisma, attemptId, userId);
+  if (loaded.error) return { error: loaded.error };
+  const attempt = loaded.attempt!;
+
+  if (attempt.estado !== 'en_progreso') {
+    return { error: { status: 400, error: "El intento ya fue finalizado" } as PartAdvanceError };
+  }
+
+  if (attempt.partStatus !== 'en_curso') {
+    return { error: { status: 400, error: "La parte actual no está en curso" } as PartAdvanceError };
+  }
+
+  const partes = attempt.exam.partes;
+  const parte = partes[attempt.currentPartIndex];
+  if (!parte) {
+    return { error: { status: 400, error: "Índice de parte inválido" } as PartAdvanceError };
+  }
+
+  if (parte.tipo === 'multiple_choice') {
+    const respuestas = body.respuestas || {};
+    const preguntaIds = parte.preguntas.map(p => p.id);
+    const respondidas = new Set(Object.keys(respuestas).map(k => parseInt(k)));
+    const faltantes = preguntaIds.filter(id => !respondidas.has(id));
+    if (faltantes.length > 0) {
+      return {
+        error: {
+          status: 400,
+          error: "Debes responder todas las preguntas de esta parte antes de continuar"
+        } as PartAdvanceError
+      };
+    }
+  }
+
+  const isLastPart = attempt.currentPartIndex === partes.length - 1;
+
+  // Datos de esta parte que se van agregando al intento (puntaje se agrega
+  // como promedio simple entre partes al finalizar).
+  let partUpdateData: any = {};
+  let partScore: number | undefined;
+
+  if (parte.tipo === 'multiple_choice') {
+    partUpdateData = await prepareMultipleChoiceFinishData(prisma, attemptId, parte.id, body.respuestas);
+    partScore = partUpdateData.puntaje;
+  } else if (parte.tipo === 'programming') {
+    const result = await prepareProgrammingFinishData(prisma, {
+      examId: attempt.examId,
+      userId,
+      partId: parte.id
+    });
+    if (result.error) {
+      return { error: result.error as PartAdvanceError };
+    }
+    partUpdateData = result.updateData || {};
+    partScore = partUpdateData.puntaje;
+  }
+
+  if (!isLastPart) {
+    const updated = await prisma.examAttempt.update({
+      where: { id: attemptId },
+      data: {
+        partStatus: 'esperando_continuar',
+        ...(partUpdateData.codigoProgramacion ? { codigoProgramacion: partUpdateData.codigoProgramacion } : {}),
+        ...(partScore !== undefined ? { puntaje: partScore } : {})
+      }
+    });
+    return { attempt: updated };
+  }
+
+  // Última parte: finalizar el intento completo. El puntaje final es el
+  // promedio simple de los puntajes de las partes (simplificación deliberada;
+  // no pondera por cantidad de preguntas/test cases de cada parte).
+  const previousScore = attempt.puntaje;
+  const scores = [previousScore, partScore].filter((s): s is number => typeof s === 'number');
+  const finalScore = scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : undefined;
+
+  const updated = await prisma.examAttempt.update({
+    where: { id: attemptId },
+    data: {
+      estado: 'finalizado',
+      partStatus: 'finalizada',
+      finishedAt: new Date(),
+      ...(partUpdateData.codigoProgramacion ? { codigoProgramacion: partUpdateData.codigoProgramacion } : {}),
+      ...(partUpdateData.testResults ? { testResults: partUpdateData.testResults } : {}),
+      ...(finalScore !== undefined ? { puntaje: finalScore } : {})
+    }
+  });
+
+  return { attempt: updated };
+}
+
+/**
+ * Confirma el paso a la siguiente parte tras el "esperando_continuar" de
+ * advancePart. El índice siempre avanza en +1 exactamente: no hay índice
+ * objetivo provisto por el cliente, así que no hay forma de saltar partes.
+ */
+export async function continueToNextPart(
+  prisma: PrismaClient,
+  attemptId: number,
+  userId: number
+) {
+  const loaded = await loadAttemptForPartTransition(prisma, attemptId, userId);
+  if (loaded.error) return { error: loaded.error };
+  const attempt = loaded.attempt!;
+
+  if (attempt.partStatus !== 'esperando_continuar') {
+    return { error: { status: 400, error: "No hay una parte esperando continuar" } as PartAdvanceError };
+  }
+
+  const nextIndex = attempt.currentPartIndex + 1;
+  if (nextIndex >= attempt.exam.partes.length) {
+    return { error: { status: 400, error: "No hay una siguiente parte" } as PartAdvanceError };
+  }
+
+  const updated = await prisma.examAttempt.update({
+    where: { id: attemptId },
+    data: {
+      currentPartIndex: nextIndex,
+      partStatus: 'en_curso'
+    }
+  });
+
+  return { attempt: updated };
 }
 
 /**

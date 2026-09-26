@@ -60,6 +60,25 @@ const datasetUpload = multer({
   }
 });
 
+const ALLOWED_IMAGE_MIME_TYPES: Record<string, string> = {
+  "image/jpeg": ".jpg",
+  "image/png": ".png",
+  "image/webp": ".webp",
+  "image/gif": ".gif"
+};
+
+const imageUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+  fileFilter: (_req, file, cb) => {
+    if (ALLOWED_IMAGE_MIME_TYPES[file.mimetype]) {
+      cb(null, true);
+    } else {
+      cb(new Error("Solo se permiten imágenes JPEG, PNG, WEBP o GIF"));
+    }
+  }
+});
+
 const ExamRoute = (prisma: PrismaClient) => {
   const router = Router();
   const codeExecutionService = new CodeExecutionService();
@@ -137,6 +156,39 @@ const ExamRoute = (prisma: PrismaClient) => {
     }
   );
 
+  // POST /exams/upload-question-image (protected - professors only)
+  // Sube una imagen para acompañar el enunciado de una pregunta multiple choice
+  router.post(
+    "/upload-question-image",
+    authenticateToken,
+    requireRole(['professor']),
+    (req, res) => {
+      imageUpload.single("archivo")(req, res, async (err: any) => {
+        if (err) {
+          const message = err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE'
+            ? "El archivo supera el tamaño máximo permitido (5MB)"
+            : err.message || "Error al subir la imagen";
+          return res.status(400).json({ error: message });
+        }
+
+        if (!req.file) {
+          return res.status(400).json({ error: "Debe adjuntar una imagen" });
+        }
+
+        try {
+          const ext = ALLOWED_IMAGE_MIME_TYPES[req.file.mimetype];
+          const publicId = `${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`;
+          const url = await uploadToCloudinary(req.file.buffer, "question-images", publicId);
+
+          res.status(201).json({ url });
+        } catch (uploadErr) {
+          console.error('Error subiendo imagen a Cloudinary:', uploadErr);
+          res.status(500).json({ error: "Error al subir la imagen al storage" });
+        }
+      });
+    }
+  );
+
   // POST /exams/create (protected - professors only)
   router.post("/create", authenticateToken, requireRole(['professor']), async (req, res) => {
     try {
@@ -191,18 +243,18 @@ const ExamRoute = (prisma: PrismaClient) => {
     }
   });
 
-  // POST /exams/:id/test-solution (protected - professors only)
+  // POST /exams/parts/:partId/test-solution (protected - professors only)
   // Ejecuta tests contra código temporal o solución de referencia
-  router.post("/:id/test-solution", authenticateToken, requireRole(['professor']), async (req, res) => {
+  router.post("/parts/:partId/test-solution", authenticateToken, requireRole(['professor']), async (req, res) => {
     try {
-      const examId = parseInt(req.params.id);
+      const partId = parseInt(req.params.partId);
       const { code, useReferenceSolution } = req.body;
 
-      if (isNaN(examId)) {
-        return res.status(400).json({ error: "ID de examen inválido" });
+      if (isNaN(partId)) {
+        return res.status(400).json({ error: "ID de parte inválido" });
       }
 
-      const result = await testSolution(prisma, codeExecutionService, examId, req.user!.userId, code, useReferenceSolution);
+      const result = await testSolution(prisma, codeExecutionService, partId, req.user!.userId, code, useReferenceSolution);
 
       if (result.error) {
         return res.status(result.error.status).json({ error: result.error.error });
@@ -256,18 +308,18 @@ const ExamRoute = (prisma: PrismaClient) => {
     }
   });
 
-  // PUT /exams/:id/reference-solution (protected - professors only)
+  // PUT /exams/parts/:partId/reference-solution (protected - professors only)
   // Guarda o actualiza la solución de referencia
-  router.put("/:id/reference-solution", authenticateToken, requireRole(['professor']), async (req, res) => {
+  router.put("/parts/:partId/reference-solution", authenticateToken, requireRole(['professor']), async (req, res) => {
     try {
-      const examId = parseInt(req.params.id);
+      const partId = parseInt(req.params.partId);
       const { solucionReferencia } = req.body;
 
-      if (isNaN(examId)) {
-        return res.status(400).json({ error: "ID de examen inválido" });
+      if (isNaN(partId)) {
+        return res.status(400).json({ error: "ID de parte inválido" });
       }
 
-      const result = await saveReferenceSolution(prisma, examId, req.user!.userId, solucionReferencia);
+      const result = await saveReferenceSolution(prisma, partId, req.user!.userId, solucionReferencia);
 
       if (result.error) {
         return res.status(result.error.status).json({ error: result.error.error });

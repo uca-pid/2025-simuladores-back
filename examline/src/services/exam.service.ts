@@ -12,11 +12,12 @@ import CodeExecutionService from "./codeExecution.service.ts";
  * Las urls pueden ser absolutas (Cloudinary) o rutas relativas heredadas de
  * cuando los archivos se guardaban en disco local.
  */
-export async function loadExamDatasets(exam: {
+export async function loadExamDatasets(part: {
   datasetFiles?: unknown;
   datasetCsvUrl?: string | null;
   datasetCsvNombre?: string | null;
 }) {
+  const exam = part;
   const entries: Array<{ url: string; nombre: string }> =
     Array.isArray(exam.datasetFiles) ? (exam.datasetFiles as any[]) : [];
 
@@ -61,8 +62,49 @@ export interface ExamValidationError {
 }
 
 /**
- * Crea un nuevo examen (multiple choice o programación) y, si corresponde,
- * guarda los archivos de solución de referencia asociados.
+ * Valida una parte del examen (multiple choice o programación) según su tipo.
+ * Devuelve un ExamValidationError si algo es inválido, o null si está ok.
+ */
+function validatePart(parte: any, index: number): ExamValidationError | null {
+  const {
+    tipo,
+    lenguajeProgramacion,
+    enunciadoTipo = 'texto',
+    enunciadoProgramacion,
+    enunciadoUrl,
+    preguntas
+  } = parte;
+
+  if (!['multiple_choice', 'programming'].includes(tipo)) {
+    return { status: 400, error: `Parte ${index + 1}: tipo debe ser 'multiple_choice' o 'programming'` };
+  }
+
+  if (tipo === 'programming') {
+    if (!lenguajeProgramacion || !['python', 'javascript'].includes(lenguajeProgramacion)) {
+      return { status: 400, error: `Parte ${index + 1}: se requiere especificar el lenguaje (python o javascript)` };
+    }
+    if (!['texto', 'archivo'].includes(enunciadoTipo)) {
+      return { status: 400, error: `Parte ${index + 1}: enunciadoTipo debe ser 'texto' o 'archivo'` };
+    }
+    if (enunciadoTipo === 'texto' && !enunciadoProgramacion) {
+      return { status: 400, error: `Parte ${index + 1}: se requiere especificar el enunciado` };
+    }
+    if (enunciadoTipo === 'archivo' && !enunciadoUrl) {
+      return { status: 400, error: `Parte ${index + 1}: se requiere subir el archivo de consigna` };
+    }
+  } else if (tipo === 'multiple_choice') {
+    if (!preguntas || preguntas.length === 0) {
+      return { status: 400, error: `Parte ${index + 1}: se requieren preguntas` };
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Crea un nuevo examen compuesto por una o más partes (multiple choice y/o
+ * programación), cada una con sus propias preguntas/consigna/test cases.
+ * Exam + ExamParts + Preguntas se crean atómicamente en una transacción.
  */
 export async function createExam(
   prisma: PrismaClient,
@@ -71,116 +113,93 @@ export async function createExam(
 ) {
   const {
     titulo,
-    preguntas,
-    tipo = 'multiple_choice',
     ordenAleatorio = false,
-    lenguajeProgramacion,
-    intellisenseHabilitado = false,
-    enunciadoTipo = 'texto',
-    enunciadoProgramacion,
-    enunciadoUrl,
-    enunciadoArchivoNombre,
-    datasetFiles,
-    codigoInicial,
-    testCases,
-    solucionReferencia,
-    referenceFiles // Array de archivos de referencia
+    partes,
+    referenceFiles // Array de archivos de referencia (legacy, aplicado al examen completo)
   } = body;
 
-  // Validar campos según el tipo de examen
-  if (tipo === 'programming') {
-    if (!lenguajeProgramacion || !['python', 'javascript'].includes(lenguajeProgramacion)) {
-      return {
-        error: {
-          status: 400,
-          error: "Para exámenes de programación se requiere especificar el lenguaje (python o javascript)"
-        } as ExamValidationError
-      };
-    }
-    if (!['texto', 'archivo'].includes(enunciadoTipo)) {
-      return {
-        error: {
-          status: 400,
-          error: "enunciadoTipo debe ser 'texto' o 'archivo'"
-        } as ExamValidationError
-      };
-    }
-    if (enunciadoTipo === 'texto' && !enunciadoProgramacion) {
-      return {
-        error: {
-          status: 400,
-          error: "Para exámenes de programación se requiere especificar el enunciado"
-        } as ExamValidationError
-      };
-    }
-    if (enunciadoTipo === 'archivo' && !enunciadoUrl) {
-      return {
-        error: {
-          status: 400,
-          error: "Para exámenes de programación con consigna en archivo se requiere subir el archivo"
-        } as ExamValidationError
-      };
-    }
-  } else if (tipo === 'multiple_choice') {
-    if (!preguntas || preguntas.length === 0) {
-      return {
-        error: {
-          status: 400,
-          error: "Para exámenes de multiple choice se requieren preguntas"
-        } as ExamValidationError
-      };
+  if (!titulo) {
+    return { error: { status: 400, error: "El título es requerido" } as ExamValidationError };
+  }
+
+  if (!Array.isArray(partes) || partes.length === 0) {
+    return { error: { status: 400, error: "Se requiere al menos una parte (partes)" } as ExamValidationError };
+  }
+
+  for (let i = 0; i < partes.length; i++) {
+    const validationError = validatePart(partes[i], i);
+    if (validationError) {
+      return { error: validationError };
     }
   }
 
-  const examData: any = {
-    titulo,
-    tipo,
-    ordenAleatorio,
-    profesorId,
-  };
+  // Tipo legacy/resumen del examen: si es una sola parte, se refleja su tipo;
+  // si son varias, se marca como 'multiple_choice' por defecto (campo ya no se
+  // usa para lógica de negocio, solo se mantiene por compatibilidad).
+  const legacyTipo = partes.length === 1 ? partes[0].tipo : 'multiple_choice';
 
-  // Agregar campos específicos según el tipo
-  if (tipo === 'programming') {
-    examData.lenguajeProgramacion = lenguajeProgramacion;
-    examData.intellisenseHabilitado = intellisenseHabilitado;
-    examData.enunciadoTipo = enunciadoTipo;
-    // Mutuamente excluyentes: solo se persiste el campo correspondiente al tipo elegido.
-    examData.enunciadoProgramacion = enunciadoTipo === 'texto' ? enunciadoProgramacion : null;
-    examData.enunciadoUrl = enunciadoTipo === 'archivo' ? enunciadoUrl : null;
-    examData.enunciadoArchivoNombre = enunciadoTipo === 'archivo' ? (enunciadoArchivoNombre || null) : null;
-    // Los datasets son independientes del tipo de consigna (texto o archivo).
-    // Se guarda como array de { url, nombre }; los campos legacy datasetCsvUrl/
-    // datasetCsvNombre quedan sin usar para exámenes nuevos (se leen igual para
-    // exámenes viejos vía loadExamDatasets).
-    examData.datasetFiles = Array.isArray(datasetFiles) && datasetFiles.length > 0
-      ? datasetFiles.filter((f: any) => f?.url && f?.nombre)
-      : null;
-    examData.codigoInicial = codigoInicial || '';
-    examData.testCases = testCases || [];
-    examData.solucionReferencia = solucionReferencia || null;
-  } else if (tipo === 'multiple_choice' && preguntas) {
-    examData.preguntas = {
-      create: preguntas.map((p: any) => ({
-        tipo: p.tipo || 'multiple_choice',
-        texto: p.texto,
-        correcta: p.correcta,
-        opciones: p.opciones,
-      })),
-    };
-  }
+  const examen = await prisma.$transaction(async (tx) => {
+    const created = await tx.exam.create({
+      data: {
+        titulo,
+        tipo: legacyTipo,
+        ordenAleatorio,
+        profesorId,
+      }
+    });
 
-  const examen = await prisma.exam.create({
-    data: examData,
-    include: { preguntas: true },
+    for (let i = 0; i < partes.length; i++) {
+      const parte = partes[i];
+      const orden = parte.orden ?? i + 1;
+      const partData: any = {
+        examId: created.id,
+        orden,
+        tipo: parte.tipo,
+      };
+
+      if (parte.tipo === 'programming') {
+        partData.lenguajeProgramacion = parte.lenguajeProgramacion;
+        partData.intellisenseHabilitado = !!parte.intellisenseHabilitado;
+        partData.enunciadoTipo = parte.enunciadoTipo || 'texto';
+        partData.enunciadoProgramacion = partData.enunciadoTipo === 'texto' ? parte.enunciadoProgramacion : null;
+        partData.enunciadoUrl = partData.enunciadoTipo === 'archivo' ? parte.enunciadoUrl : null;
+        partData.enunciadoArchivoNombre = partData.enunciadoTipo === 'archivo' ? (parte.enunciadoArchivoNombre || null) : null;
+        partData.datasetFiles = Array.isArray(parte.datasetFiles) && parte.datasetFiles.length > 0
+          ? parte.datasetFiles.filter((f: any) => f?.url && f?.nombre)
+          : null;
+        partData.codigoInicial = parte.codigoInicial || '';
+        partData.testCases = parte.testCases || [];
+        partData.solucionReferencia = parte.solucionReferencia || null;
+      }
+
+      const createdPart = await tx.examPart.create({ data: partData });
+
+      if (parte.tipo === 'multiple_choice' && Array.isArray(parte.preguntas)) {
+        await tx.pregunta.createMany({
+          data: parte.preguntas.map((p: any, pIndex: number) => ({
+            partId: createdPart.id,
+            tipo: p.tipo || 'multiple_choice',
+            texto: p.texto,
+            correcta: p.correcta,
+            opciones: p.opciones,
+            orden: p.orden ?? pIndex + 1,
+            imagenUrl: p.imagenUrl || null,
+          }))
+        });
+      }
+    }
+
+    return tx.exam.findUniqueOrThrow({
+      where: { id: created.id },
+      include: { partes: { include: { preguntas: true }, orderBy: { orden: 'asc' } } }
+    });
   });
 
   // Guardar archivos de referencia si existen (solo para exámenes de programación)
-  if (tipo === 'programming' && referenceFiles && Array.isArray(referenceFiles) && referenceFiles.length > 0) {
-    // Filtrar archivos que tengan contenido
+  if (referenceFiles && Array.isArray(referenceFiles) && referenceFiles.length > 0) {
     const filesWithContent = referenceFiles.filter((f: any) => f.filename && f.content && f.content.trim());
 
     if (filesWithContent.length > 0) {
-      // Guardar cada archivo en la tabla ExamFile
       await Promise.all(filesWithContent.map((file: any) =>
         prisma.examFile.upsert({
           where: {
@@ -236,7 +255,10 @@ export async function getExamsForUser(
     } else {
       // Get all exams for system users
       const exams = await prisma.exam.findMany({
-        include: { preguntas: true, profesor: { select: { nombre: true, email: true } } },
+        include: {
+          partes: { include: { preguntas: true }, orderBy: { orden: 'asc' } },
+          profesor: { select: { nombre: true, email: true } }
+        },
       });
       return { exams };
     }
@@ -246,7 +268,7 @@ export async function getExamsForUser(
 
   const exams = await prisma.exam.findMany({
     where: { profesorId },
-    include: { preguntas: true },
+    include: { partes: { include: { preguntas: true }, orderBy: { orden: 'asc' } } },
   });
 
   return { exams };
@@ -369,7 +391,7 @@ export async function getExamById(
 
   const exam = await prisma.exam.findUnique({
     where: { id: examId },
-    include: { preguntas: true },
+    include: { partes: { include: { preguntas: true }, orderBy: { orden: 'asc' } } },
   });
 
   if (!exam) {
@@ -384,30 +406,45 @@ export async function getExamById(
       create: { userId, examId },
     });
 
-    // 🔒 SEGURIDAD: NO enviar respuestas correctas ni datos de test cases
+    // Un estudiante nunca debe recibir las preguntas de partes que no sean la
+    // parte en curso de su intento: solo se sanitiza/expone la parte actual
+    // (basado en currentPartIndex del intento, server-authoritative).
+    const attempt = await prisma.examAttempt.findFirst({
+      where: { userId, examId, examWindowId: windowId ?? null }
+    });
+    const currentPartIndex = attempt?.currentPartIndex ?? 0;
+
     const sanitizedExam: any = { ...exam };
+    sanitizedExam.currentPartIndex = currentPartIndex;
+    sanitizedExam.partStatus = attempt?.partStatus ?? 'en_curso';
 
-    // Eliminar respuestas correctas de preguntas (EXCEPTO para matching y fill_in_blank)
-    // Para matching y fill_in_blank, 'correcta' indica la CANTIDAD de elementos, no la respuesta
-    if (sanitizedExam.preguntas) {
-      sanitizedExam.preguntas = sanitizedExam.preguntas.map((pregunta: any) => {
-        // Para matching y fill_in_blank, mantener 'correcta' porque indica cantidad de conceptos/respuestas
-        if (pregunta.tipo === 'matching' || pregunta.tipo === 'fill_in_blank') {
-          return pregunta;
-        }
-        // Para otros tipos (multiple_choice, true_false), eliminar 'correcta'
-        const { correcta, ...preguntaSinRespuesta } = pregunta;
-        return preguntaSinRespuesta;
-      });
-    }
+    sanitizedExam.partes = exam.partes.map((parte: any, idx: number) => {
+      const { solucionReferencia, ...parteSinSolucion } = parte;
 
-    // Sanitizar test cases (solo enviar descripción, no expectedOutput ni input)
-    if (sanitizedExam.testCases && Array.isArray(sanitizedExam.testCases)) {
-      sanitizedExam.testCases = sanitizedExam.testCases.map((tc: any) => ({
-        description: tc.description || 'Test case'
-        // NO enviar expectedOutput, input ni otros datos
-      }));
-    }
+      if (idx !== currentPartIndex) {
+        // Otras partes: no exponer preguntas ni test cases al estudiante
+        const { preguntas, testCases, ...rest } = parteSinSolucion;
+        return { ...rest, preguntas: [], testCases: undefined };
+      }
+
+      // 🔒 SEGURIDAD: NO enviar respuestas correctas ni datos de test cases de la parte actual
+      const preguntas = Array.isArray(parteSinSolucion.preguntas)
+        ? parteSinSolucion.preguntas.map((pregunta: any) => {
+            // Para matching y fill_in_blank, 'correcta' indica cantidad, no la respuesta
+            if (pregunta.tipo === 'matching' || pregunta.tipo === 'fill_in_blank') {
+              return pregunta;
+            }
+            const { correcta, ...preguntaSinRespuesta } = pregunta;
+            return preguntaSinRespuesta;
+          })
+        : [];
+
+      const testCases = Array.isArray(parteSinSolucion.testCases)
+        ? parteSinSolucion.testCases.map((tc: any) => ({ description: tc.description || 'Test case' }))
+        : parteSinSolucion.testCases;
+
+      return { ...parteSinSolucion, preguntas, testCases };
+    });
 
     return { exam: sanitizedExam };
   }
@@ -420,7 +457,10 @@ export async function getExamById(
   // Ocultar solución de referencia si no es el profesor dueño
   const examResponse: any = { ...exam };
   if (exam.profesorId !== userId) {
-    delete examResponse.solucionReferencia;
+    examResponse.partes = exam.partes.map((p: any) => {
+      const { solucionReferencia, ...rest } = p;
+      return rest;
+    });
   }
 
   return { exam: examResponse };
@@ -452,46 +492,72 @@ export async function validateExamOwnership(
 }
 
 /**
- * Ejecuta los test cases de un examen de programación contra el código
+ * Verifica que la ExamPart exista y que el examen al que pertenece sea del
+ * profesor indicado. Devuelve la parte si es válida, o un error listo para responder.
+ */
+export async function validatePartOwnership(
+  prisma: PrismaClient,
+  partId: number,
+  profesorId: number,
+  forbiddenMessage: string
+) {
+  const parte = await prisma.examPart.findUnique({
+    where: { id: partId },
+    include: { exam: true }
+  });
+
+  if (!parte) {
+    return { error: { status: 404, error: "Parte de examen no encontrada" } as ExamValidationError };
+  }
+
+  if (parte.exam.profesorId !== profesorId) {
+    return { error: { status: 403, error: forbiddenMessage } as ExamValidationError };
+  }
+
+  return { parte };
+}
+
+/**
+ * Ejecuta los test cases de una parte de programación contra el código
  * indicado o contra la solución de referencia guardada.
  */
 export async function testSolution(
   prisma: PrismaClient,
   codeExecutionService: CodeExecutionService,
-  examId: number,
+  partId: number,
   profesorId: number,
   code: string | undefined,
   useReferenceSolution: boolean
 ) {
-  // Verificar que el examen existe y pertenece al profesor
-  const ownership = await validateExamOwnership(
+  // Verificar que la parte existe y pertenece al profesor
+  const ownership = await validatePartOwnership(
     prisma,
-    examId,
+    partId,
     profesorId,
-    "No tienes permiso para ejecutar tests en este examen"
+    "No tienes permiso para ejecutar tests en esta parte del examen"
   );
   if (ownership.error) {
     return { error: ownership.error };
   }
 
-  const exam = ownership.exam!;
+  const parte = ownership.parte!;
 
-  if (exam.tipo !== 'programming') {
-    return { error: { status: 400, error: "Este examen no es de tipo programación" } as ExamValidationError };
+  if (parte.tipo !== 'programming') {
+    return { error: { status: 400, error: "Esta parte no es de tipo programación" } as ExamValidationError };
   }
 
-  if (!exam.testCases || !Array.isArray(exam.testCases) || exam.testCases.length === 0) {
-    return { error: { status: 400, error: "El examen no tiene test cases configurados" } as ExamValidationError };
+  if (!parte.testCases || !Array.isArray(parte.testCases) || parte.testCases.length === 0) {
+    return { error: { status: 400, error: "La parte no tiene test cases configurados" } as ExamValidationError };
   }
 
   // Determinar qué código ejecutar
   let codeToExecute: string;
 
   if (useReferenceSolution) {
-    if (!exam.solucionReferencia) {
-      return { error: { status: 400, error: "El examen no tiene una solución de referencia guardada" } as ExamValidationError };
+    if (!parte.solucionReferencia) {
+      return { error: { status: 400, error: "La parte no tiene una solución de referencia guardada" } as ExamValidationError };
     }
-    codeToExecute = exam.solucionReferencia;
+    codeToExecute = parte.solucionReferencia;
   } else {
     if (!code) {
       return { error: { status: 400, error: "Debe proporcionar código para ejecutar" } as ExamValidationError };
@@ -500,11 +566,11 @@ export async function testSolution(
   }
 
   // Ejecutar los tests
-  const datasets = await loadExamDatasets(exam);
+  const datasets = await loadExamDatasets(parte);
   const testResults = await codeExecutionService.runTests(
     codeToExecute,
-    exam.lenguajeProgramacion as 'python' | 'javascript',
-    exam.testCases as any[],
+    parte.lenguajeProgramacion as 'python' | 'javascript',
+    parte.testCases as any[],
     { timeout: 10000, datasets }
   );
 
@@ -531,34 +597,34 @@ export async function testSolutionPreview(
 }
 
 /**
- * Guarda o actualiza la solución de referencia de un examen de programación.
+ * Guarda o actualiza la solución de referencia de una parte de programación.
  */
 export async function saveReferenceSolution(
   prisma: PrismaClient,
-  examId: number,
+  partId: number,
   profesorId: number,
   solucionReferencia: string
 ) {
-  // Verificar que el examen existe y pertenece al profesor
-  const ownership = await validateExamOwnership(
+  // Verificar que la parte existe y pertenece al profesor
+  const ownership = await validatePartOwnership(
     prisma,
-    examId,
+    partId,
     profesorId,
-    "No tienes permiso para modificar este examen"
+    "No tienes permiso para modificar esta parte del examen"
   );
   if (ownership.error) {
     return { error: ownership.error };
   }
 
-  const exam = ownership.exam!;
+  const parte = ownership.parte!;
 
-  if (exam.tipo !== 'programming') {
-    return { error: { status: 400, error: "Este examen no es de tipo programación" } as ExamValidationError };
+  if (parte.tipo !== 'programming') {
+    return { error: { status: 400, error: "Esta parte no es de tipo programación" } as ExamValidationError };
   }
 
   // Actualizar la solución de referencia
-  const updatedExam = await prisma.exam.update({
-    where: { id: examId },
+  const updatedExam = await prisma.examPart.update({
+    where: { id: partId },
     data: { solucionReferencia }
   });
 

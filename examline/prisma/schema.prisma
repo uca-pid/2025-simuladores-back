@@ -25,26 +25,37 @@ model Exam {
   id                    Int           @id @default(autoincrement())
   titulo                String
   profesorId            Int
-  tipo                  String        @default("multiple_choice") // "multiple_choice" | "programming"
+  tipo                  String        @default("multiple_choice") // legacy/summary: "multiple_choice" | "programming" (no longer enforced now that exams are split into ExamPart)
   ordenAleatorio        Boolean       @default(false) // si las preguntas deben aparecer en orden aleatorio para cada estudiante
-  lenguajeProgramacion  String?       // "python" | "javascript" (solo para exámenes de programación)
-  intellisenseHabilitado Boolean      @default(false) // solo para exámenes de programación
-  enunciadoTipo         String        @default("texto") // "texto" | "archivo" (mutuamente excluyentes)
+  profesor              User          @relation(fields: [profesorId], references: [id])
+  intentos              ExamAttempt[]
+  history               ExamHistory[]
+  ventanas              ExamWindow[]
+  partes                ExamPart[]
+  examFiles             ExamFile[]
+}
+
+model ExamPart {
+  id                    Int      @id @default(autoincrement())
+  examId                Int
+  orden                 Int
+  tipo                  String   // "multiple_choice" | "programming"
+  lenguajeProgramacion  String?       // "python" | "javascript" (solo para partes de programación)
+  intellisenseHabilitado Boolean @default(false) // solo para partes de programación
+  enunciadoTipo         String   @default("texto") // "texto" | "archivo" (mutuamente excluyentes)
   enunciadoProgramacion String?       // enunciado en texto (solo si enunciadoTipo = "texto")
   enunciadoUrl          String?       // ruta al archivo PDF/DOCX de consigna subido (solo si enunciadoTipo = "archivo")
   enunciadoArchivoNombre String?      // nombre original del archivo subido, para mostrar en la UI
   datasetCsvUrl         String?       // [legacy] ruta al único CSV de datos de versiones anteriores; usar datasetFiles
   datasetCsvNombre      String?       // [legacy] nombre original del CSV de versiones anteriores; usar datasetFiles
-  datasetFiles          Json?         // array de { url, nombre } con los archivos de datos subidos (CSV/TXT), opcional e independiente de la consigna
-  codigoInicial         String?       // código inicial/template para exámenes de programación
-  testCases             Json?         // casos de prueba para evaluación automática de exámenes de programación
+  datasetFiles          Json?         // array de { url, nombre } con los archivos de datos subidos (CSV/TXT)
+  codigoInicial         String?       // código inicial/template para partes de programación
+  testCases             Json?         // casos de prueba para evaluación automática de partes de programación
   solucionReferencia    String?       // solución de referencia del profesor (solo visible para él)
-  profesor              User          @relation(fields: [profesorId], references: [id])
-  intentos              ExamAttempt[]
-  history               ExamHistory[]
-  ventanas              ExamWindow[]
+  exam                  Exam     @relation(fields: [examId], references: [id])
   preguntas             Pregunta[]
-  examFiles             ExamFile[]
+
+  @@unique([examId, orden])
 }
 
 model Pregunta {
@@ -59,8 +70,10 @@ model Pregunta {
                   // - multiple_choice/true_false: índice de la opción correcta
                   // - fill_in_blank: cantidad de respuestas correctas (divide el array opciones)
                   // - matching: cantidad de conceptos (divide el array opciones)
-  examId   Int
-  exam     Exam   @relation(fields: [examId], references: [id])
+  orden    Int?
+  imagenUrl String?
+  partId   Int
+  parte    ExamPart @relation(fields: [partId], references: [id])
   respuestasEstudiante RespuestaEstudiante[] // Respuestas de estudiantes a esta pregunta
 }
 
@@ -173,6 +186,8 @@ model ExamAttempt {
   comentariosCorreccion String? // comentarios del profesor sobre la corrección
   corregidoPor Int?        // ID del profesor que corrigió
   corregidoAt  DateTime?   // fecha de corrección manual
+  currentPartIndex Int     @default(0) // índice (0-based) de la ExamPart en curso, según orden
+  partStatus   String      @default("en_curso") // "en_curso" | "esperando_continuar" | "finalizada"
   examWindow   ExamWindow? @relation(fields: [examWindowId], references: [id])
   exam         Exam        @relation(fields: [examId], references: [id])
   user         User        @relation(fields: [userId], references: [id])
