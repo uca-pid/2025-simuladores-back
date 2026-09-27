@@ -255,6 +255,7 @@ export async function getExamsForUser(
     } else {
       // Get all exams for system users
       const exams = await prisma.exam.findMany({
+        where: { eliminado: false },
         include: {
           partes: { include: { preguntas: true }, orderBy: { orden: 'asc' } },
           profesor: { select: { nombre: true, email: true } }
@@ -267,7 +268,7 @@ export async function getExamsForUser(
   }
 
   const exams = await prisma.exam.findMany({
-    where: { profesorId },
+    where: { profesorId, eliminado: false },
     include: { partes: { include: { preguntas: true }, orderBy: { orden: 'asc' } } },
   });
 
@@ -464,6 +465,181 @@ export async function getExamById(
   }
 
   return { exam: examResponse };
+}
+
+/**
+ * Marca un examen como eliminado (soft-delete). Nunca borra la fila realmente,
+ * para preservar el historial de intentos/ventanas ya existentes.
+ */
+export async function deleteExam(
+  prisma: PrismaClient,
+  examId: number,
+  profesorId: number
+) {
+  const ownership = await validateExamOwnership(
+    prisma,
+    examId,
+    profesorId,
+    "No tienes permiso para eliminar este examen"
+  );
+  if (ownership.error) {
+    return { error: ownership.error };
+  }
+
+  const exam = await prisma.exam.update({
+    where: { id: examId },
+    data: { eliminado: true }
+  });
+
+  return { exam };
+}
+
+/**
+ * Actualiza un examen existente. `titulo`/`ordenAleatorio` siempre se pueden
+ * modificar. El reemplazo de `partes` (contenido completo) solo se permite si
+ * el examen no tiene intentos de alumnos registrados, para no invalidar datos
+ * ya guardados (respuestas referenciando preguntas que dejarían de existir).
+ */
+export async function updateExam(
+  prisma: PrismaClient,
+  examId: number,
+  body: any,
+  profesorId: number
+) {
+  const ownership = await validateExamOwnership(
+    prisma,
+    examId,
+    profesorId,
+    "No tienes permiso para modificar este examen"
+  );
+  if (ownership.error) {
+    return { error: ownership.error };
+  }
+
+  const { titulo, ordenAleatorio, partes, referenceFiles } = body;
+
+  const basicUpdateData: any = {};
+  if (titulo !== undefined) basicUpdateData.titulo = titulo;
+  if (ordenAleatorio !== undefined) basicUpdateData.ordenAleatorio = !!ordenAleatorio;
+
+  let contentEditWarning: ExamValidationError | null = null;
+
+  if (partes !== undefined) {
+    const attemptCount = await prisma.examAttempt.count({ where: { examId } });
+
+    if (attemptCount > 0) {
+      // No se puede tocar el contenido: ya hay respuestas de alumnos que dependen
+      // de las Preguntas/ExamParts actuales. Se ignora `partes` pero se sigue
+      // aplicando el resto del body (titulo/ordenAleatorio).
+      contentEditWarning = {
+        status: 409,
+        error: "No se puede modificar el contenido de un examen con intentos de alumnos registrados"
+      };
+    } else {
+      if (!Array.isArray(partes) || partes.length === 0) {
+        return { error: { status: 400, error: "Se requiere al menos una parte (partes)" } as ExamValidationError };
+      }
+
+      for (let i = 0; i < partes.length; i++) {
+        const validationError = validatePart(partes[i], i);
+        if (validationError) {
+          return { error: validationError };
+        }
+      }
+
+      basicUpdateData.tipo = partes.length === 1 ? partes[0].tipo : 'multiple_choice';
+    }
+  }
+
+  await prisma.$transaction(async (tx) => {
+    if (Object.keys(basicUpdateData).length > 0) {
+      await tx.exam.update({ where: { id: examId }, data: basicUpdateData });
+    }
+
+    if (partes !== undefined && !contentEditWarning) {
+      // Reemplazar contenido: borrar ExamParts existentes (cascada a Pregunta) y
+      // recrear, igual que en createExam.
+      await tx.examPart.deleteMany({ where: { examId } });
+
+      for (let i = 0; i < partes.length; i++) {
+        const parte = partes[i];
+        const orden = parte.orden ?? i + 1;
+        const partData: any = {
+          examId,
+          orden,
+          tipo: parte.tipo,
+        };
+
+        if (parte.tipo === 'programming') {
+          partData.lenguajeProgramacion = parte.lenguajeProgramacion;
+          partData.intellisenseHabilitado = !!parte.intellisenseHabilitado;
+          partData.enunciadoTipo = parte.enunciadoTipo || 'texto';
+          partData.enunciadoProgramacion = partData.enunciadoTipo === 'texto' ? parte.enunciadoProgramacion : null;
+          partData.enunciadoUrl = partData.enunciadoTipo === 'archivo' ? parte.enunciadoUrl : null;
+          partData.enunciadoArchivoNombre = partData.enunciadoTipo === 'archivo' ? (parte.enunciadoArchivoNombre || null) : null;
+          partData.datasetFiles = Array.isArray(parte.datasetFiles) && parte.datasetFiles.length > 0
+            ? parte.datasetFiles.filter((f: any) => f?.url && f?.nombre)
+            : null;
+          partData.codigoInicial = parte.codigoInicial || '';
+          partData.testCases = parte.testCases || [];
+          partData.solucionReferencia = parte.solucionReferencia || null;
+        }
+
+        const createdPart = await tx.examPart.create({ data: partData });
+
+        if (parte.tipo === 'multiple_choice' && Array.isArray(parte.preguntas)) {
+          await tx.pregunta.createMany({
+            data: parte.preguntas.map((p: any, pIndex: number) => ({
+              partId: createdPart.id,
+              tipo: p.tipo || 'multiple_choice',
+              texto: p.texto,
+              correcta: p.correcta,
+              opciones: p.opciones,
+              orden: p.orden ?? pIndex + 1,
+              imagenUrl: p.imagenUrl || null,
+            }))
+          });
+        }
+      }
+    }
+  });
+
+  if (referenceFiles && Array.isArray(referenceFiles) && referenceFiles.length > 0 && !contentEditWarning) {
+    const filesWithContent = referenceFiles.filter((f: any) => f.filename && f.content && f.content.trim());
+
+    if (filesWithContent.length > 0) {
+      await Promise.all(filesWithContent.map((file: any) =>
+        prisma.examFile.upsert({
+          where: {
+            examId_userId_filename_version: {
+              examId,
+              userId: profesorId,
+              filename: file.filename,
+              version: 'reference_solution'
+            }
+          },
+          update: {
+            content: file.content,
+            updatedAt: new Date()
+          },
+          create: {
+            examId,
+            userId: profesorId,
+            filename: file.filename,
+            content: file.content,
+            version: 'reference_solution'
+          }
+        })
+      ));
+    }
+  }
+
+  const updated = await getExamById(prisma, examId, null, 'professor', profesorId);
+  if (updated.error) {
+    return { error: updated.error };
+  }
+
+  return { exam: updated.exam, contentEditWarning };
 }
 
 /**

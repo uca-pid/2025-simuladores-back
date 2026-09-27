@@ -27,6 +27,7 @@ model Exam {
   profesorId            Int
   tipo                  String        @default("multiple_choice") // legacy/summary: "multiple_choice" | "programming" (no longer enforced now that exams are split into ExamPart)
   ordenAleatorio        Boolean       @default(false) // si las preguntas deben aparecer en orden aleatorio para cada estudiante
+  eliminado             Boolean       @default(false) // soft-delete: examen oculto de listados pero conservado para intentos existentes
   profesor              User          @relation(fields: [profesorId], references: [id])
   intentos              ExamAttempt[]
   history               ExamHistory[]
@@ -73,7 +74,7 @@ model Pregunta {
   orden    Int?
   imagenUrl String?
   partId   Int
-  parte    ExamPart @relation(fields: [partId], references: [id])
+  parte    ExamPart @relation(fields: [partId], references: [id], onDelete: Cascade)
   respuestasEstudiante RespuestaEstudiante[] // Respuestas de estudiantes a esta pregunta
 }
 

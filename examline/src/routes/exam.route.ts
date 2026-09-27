@@ -8,6 +8,8 @@ import {
   createExam,
   getExamsForUser,
   getExamById,
+  updateExam,
+  deleteExam,
   testSolution,
   testSolutionPreview,
   saveReferenceSolution
@@ -240,6 +242,55 @@ const ExamRoute = (prisma: PrismaClient) => {
     } catch (error) {
       console.error('Error fetching exam:', error);
       res.status(500).json({ error: "Error al obtener el examen" });
+    }
+  });
+
+  // PUT /exams/:examId (protected - professors only, must own the exam)
+  // Siempre permite actualizar titulo/ordenAleatorio. El reemplazo de `partes`
+  // (contenido completo) solo se aplica si el examen no tiene intentos.
+  router.put("/:examId", authenticateToken, requireRole(['professor']), async (req, res) => {
+    const examId = parseInt(req.params.examId);
+    if (isNaN(examId)) return res.status(400).json({ error: "examId inválido" });
+
+    try {
+      const result = await updateExam(prisma, examId, req.body, req.user!.userId);
+
+      if (result.error) {
+        return res.status(result.error.status).json({ error: result.error.error });
+      }
+
+      if (result.contentEditWarning) {
+        return res.status(result.contentEditWarning.status).json({
+          error: result.contentEditWarning.error,
+          exam: result.exam
+        });
+      }
+
+      res.json(result.exam);
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: "No se pudo actualizar el examen" });
+    }
+  });
+
+  // DELETE /exams/:examId (protected - professors only, must own the exam)
+  // Soft-delete: marca el examen como eliminado sin borrar la fila (preserva
+  // intentos/ventanas históricos).
+  router.delete("/:examId", authenticateToken, requireRole(['professor']), async (req, res) => {
+    const examId = parseInt(req.params.examId);
+    if (isNaN(examId)) return res.status(400).json({ error: "examId inválido" });
+
+    try {
+      const result = await deleteExam(prisma, examId, req.user!.userId);
+
+      if (result.error) {
+        return res.status(result.error.status).json({ error: result.error.error });
+      }
+
+      res.json({ success: true, message: "Examen eliminado correctamente" });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: "No se pudo eliminar el examen" });
     }
   });
 

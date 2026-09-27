@@ -169,7 +169,9 @@ router.get('/disponibles', authenticateToken, requireRole(['student']), async (r
         {
           sinTiempo: true
         }
-      ]
+      ],
+      // Las ventanas de exámenes soft-eliminados no deben ofrecerse para inscripción
+      exam: { eliminado: false }
     };
 
     // Filtro por ID de ventana
