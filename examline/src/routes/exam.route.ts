@@ -335,8 +335,8 @@ const ExamRoute = (prisma: PrismaClient) => {
         return res.status(400).json({ error: "Debe proporcionar código para ejecutar" });
       }
 
-      if (!language || !['python', 'javascript'].includes(language)) {
-        return res.status(400).json({ error: "Lenguaje no válido. Use 'python' o 'javascript'" });
+      if (!language || !['python', 'javascript', 'c'].includes(language)) {
+        return res.status(400).json({ error: "Lenguaje no válido. Use 'python', 'javascript' o 'c'" });
       }
 
       if (!testCases || !Array.isArray(testCases) || testCases.length === 0) {

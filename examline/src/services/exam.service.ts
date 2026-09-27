@@ -80,8 +80,8 @@ function validatePart(parte: any, index: number): ExamValidationError | null {
   }
 
   if (tipo === 'programming') {
-    if (!lenguajeProgramacion || !['python', 'javascript'].includes(lenguajeProgramacion)) {
-      return { status: 400, error: `Parte ${index + 1}: se requiere especificar el lenguaje (python o javascript)` };
+    if (!lenguajeProgramacion || !['python', 'javascript', 'c'].includes(lenguajeProgramacion)) {
+      return { status: 400, error: `Parte ${index + 1}: se requiere especificar el lenguaje (python, javascript o c)` };
     }
     if (!['texto', 'archivo'].includes(enunciadoTipo)) {
       return { status: 400, error: `Parte ${index + 1}: enunciadoTipo debe ser 'texto' o 'archivo'` };
@@ -745,7 +745,7 @@ export async function testSolution(
   const datasets = await loadExamDatasets(parte);
   const testResults = await codeExecutionService.runTests(
     codeToExecute,
-    parte.lenguajeProgramacion as 'python' | 'javascript',
+    parte.lenguajeProgramacion as 'python' | 'javascript' | 'c',
     parte.testCases as any[],
     { timeout: 10000, datasets }
   );
@@ -764,7 +764,7 @@ export async function testSolutionPreview(
 ) {
   const testResults = await codeExecutionService.runTests(
     code,
-    language as 'python' | 'javascript',
+    language as 'python' | 'javascript' | 'c',
     testCases,
     { timeout: 10000 }
   );

@@ -67,7 +67,7 @@ class CodeExecutionService {
    */
   async executeCode(
     code: string,
-    language: 'python' | 'javascript',
+    language: 'python' | 'javascript' | 'c',
     options: ExecutionOptions = {}
   ): Promise<ExecutionResult> {
     const startTime = Date.now();
@@ -78,6 +78,8 @@ class CodeExecutionService {
         return await this.executePython(code, timeout, input, options.datasets);
       } else if (language === 'javascript') {
         return await this.executeJavaScript(code, timeout, input, options.datasets);
+      } else if (language === 'c') {
+        return await this.executeC(code, timeout, input, options.datasets);
       } else {
         throw new Error(`Lenguaje no soportado: ${language}`);
       }
@@ -281,6 +283,146 @@ class CodeExecutionService {
   }
 
   /**
+   * Ejecuta código C: compila con gcc y corre el binario resultante.
+   *
+   * La compilación tiene su propio presupuesto de tiempo (mismo valor que el
+   * timeout de ejecución) separado del timeout de la corrida: así un programa
+   * que compila rápido pero se cuelga en runtime no se beneficia del tiempo
+   * "gastado" en compilar, y viceversa un programa que tarda en compilar no le
+   * resta tiempo a su propia ejecución.
+   */
+  private async executeC(code: string, timeout: number, input: string = '', datasets?: DatasetFile[]): Promise<ExecutionResult> {
+    const startTime = Date.now();
+    const { dir, codeFile } = await this.createExecutionDir(code, '.c', datasets);
+    const binaryFile = path.join(dir, process.platform === 'win32' ? 'code.exe' : 'code.out');
+
+    const compileResult = await this.compileC(codeFile, binaryFile, dir, timeout);
+    if (!compileResult.success) {
+      await this.cleanupExecutionDir(dir);
+      const executionTime = Date.now() - startTime;
+      return {
+        output: '',
+        error: compileResult.error,
+        exitCode: 1,
+        executionTime
+      };
+    }
+
+    return new Promise((resolve) => {
+      let stdout = '';
+      let stderr = '';
+      let isTimeout = false;
+
+      const runProcess = spawn(binaryFile, [], {
+        windowsHide: true,
+        cwd: dir,
+      });
+
+      const timeoutId = setTimeout(() => {
+        isTimeout = true;
+        runProcess.kill('SIGTERM');
+      }, timeout);
+
+      runProcess.stdout.on('data', (data) => {
+        stdout += data.toString();
+      });
+
+      runProcess.stderr.on('data', (data) => {
+        stderr += data.toString();
+      });
+
+      if (input) {
+        const inputWithNewline = input.endsWith('\n') ? input : input + '\n';
+        runProcess.stdin.write(inputWithNewline);
+        runProcess.stdin.end();
+      } else {
+        runProcess.stdin.end();
+      }
+
+      runProcess.on('close', async (exitCode) => {
+        clearTimeout(timeoutId);
+        const executionTime = Date.now() - startTime;
+        await this.cleanupExecutionDir(dir);
+
+        if (isTimeout) {
+          resolve({
+            output: stdout || '',
+            error: `Tiempo de ejecución excedido (máximo ${timeout}ms)`,
+            exitCode: 124,
+            executionTime
+          });
+        } else {
+          resolve({
+            output: stdout || '',
+            error: stderr || null,
+            exitCode: exitCode || 0,
+            executionTime
+          });
+        }
+      });
+
+      runProcess.on('error', async (error) => {
+        clearTimeout(timeoutId);
+        const executionTime = Date.now() - startTime;
+        await this.cleanupExecutionDir(dir);
+
+        resolve({
+          output: '',
+          error: error.message,
+          exitCode: 1,
+          executionTime
+        });
+      });
+    });
+  }
+
+  /**
+   * Compila un archivo .c con gcc. Usa el mismo valor de timeout que la
+   * ejecución, pero como presupuesto independiente (ver comentario de executeC).
+   */
+  private async compileC(
+    codeFile: string,
+    binaryFile: string,
+    dir: string,
+    compileTimeout: number
+  ): Promise<{ success: boolean; error: string | null }> {
+    return new Promise((resolve) => {
+      let stderr = '';
+      let isTimeout = false;
+
+      const gccProcess = spawn('gcc', [codeFile, '-o', binaryFile, '-lm'], {
+        windowsHide: true,
+        cwd: dir,
+      });
+
+      const timeoutId = setTimeout(() => {
+        isTimeout = true;
+        gccProcess.kill('SIGTERM');
+      }, compileTimeout);
+
+      gccProcess.stderr.on('data', (data) => {
+        stderr += data.toString();
+      });
+
+      gccProcess.on('close', (code) => {
+        clearTimeout(timeoutId);
+        if (isTimeout) {
+          resolve({ success: false, error: `Tiempo de compilación excedido (máximo ${compileTimeout}ms)` });
+        } else if (code !== 0) {
+          resolve({ success: false, error: stderr || 'Error de compilación' });
+        } else {
+          resolve({ success: true, error: null });
+        }
+      });
+
+      gccProcess.on('error', (error) => {
+        clearTimeout(timeoutId);
+        resolve({ success: false, error: `No se pudo compilar: ${error.message}` });
+      });
+    });
+  }
+
+  /**
    * Inyecta un polyfill de prompt() para Node.js que usa readline-sync
    * Esto permite que el código JavaScript use prompt() como en el navegador
    */
@@ -334,12 +476,14 @@ rl.on('close', () => {
   /**
    * Valida la sintaxis del código sin ejecutarlo
    */
-  async validateSyntax(code: string, language: 'python' | 'javascript'): Promise<ValidationResult> {
+  async validateSyntax(code: string, language: 'python' | 'javascript' | 'c'): Promise<ValidationResult> {
     try {
       if (language === 'python') {
         return await this.validatePythonSyntax(code);
       } else if (language === 'javascript') {
         return await this.validateJavaScriptSyntax(code);
+      } else if (language === 'c') {
+        return await this.validateCSyntax(code);
       } else {
         return {
           valid: false,
@@ -398,6 +542,38 @@ rl.on('close', () => {
     try {
       await execAsync(
         `node --check "${tempFile}"`,
+        {
+          timeout: 5000,
+          windowsHide: true,
+        }
+      );
+
+      return {
+        valid: true,
+        errors: []
+      };
+
+    } catch (error: any) {
+      const errorOutput = error.stderr || error.message;
+      return {
+        valid: false,
+        errors: [errorOutput]
+      };
+
+    } finally {
+      await this.cleanupTempFile(tempFile);
+    }
+  }
+
+  /**
+   * Valida sintaxis de C usando gcc -fsyntax-only (no genera binario)
+   */
+  private async validateCSyntax(code: string): Promise<ValidationResult> {
+    const tempFile = await this.createTempFile(code, '.c');
+
+    try {
+      await execAsync(
+        `gcc -fsyntax-only "${tempFile}"`,
         {
           timeout: 5000,
           windowsHide: true,
@@ -489,7 +665,7 @@ rl.on('close', () => {
    */
   async runTests(
     code: string,
-    language: 'python' | 'javascript',
+    language: 'python' | 'javascript' | 'c',
     testCases: Array<{ description: string; input: string; expectedOutput: string }>,
     options: ExecutionOptions = {}
   ): Promise<{

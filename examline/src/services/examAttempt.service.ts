@@ -158,7 +158,7 @@ export async function evaluateProgrammingTestCases(
     try {
       const result = await codeExecutionService.executeCode(
         codigo,
-        lenguajeProgramacion as 'python' | 'javascript',
+        lenguajeProgramacion as 'python' | 'javascript' | 'c',
         {
           input: testCase.input || '',
           timeout: 10000

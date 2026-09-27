@@ -26,9 +26,9 @@ const CodeExecutionRoute = (prisma: PrismaClient) => {
         });
       }
 
-      if (!['python', 'javascript'].includes(language)) {
+      if (!['python', 'javascript', 'c'].includes(language)) {
         return res.status(400).json({
-          error: 'Lenguaje no soportado. Use "python" o "javascript"'
+          error: 'Lenguaje no soportado. Use "python", "javascript" o "c"'
         });
       }
 
@@ -151,9 +151,9 @@ const CodeExecutionRoute = (prisma: PrismaClient) => {
         });
       }
 
-      if (!['python', 'javascript'].includes(language)) {
+      if (!['python', 'javascript', 'c'].includes(language)) {
         return res.status(400).json({
-          error: 'Lenguaje no soportado. Use "python" o "javascript"'
+          error: 'Lenguaje no soportado. Use "python", "javascript" o "c"'
         });
       }
 

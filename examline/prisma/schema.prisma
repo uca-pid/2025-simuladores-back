@@ -41,7 +41,7 @@ model ExamPart {
   examId                Int
   orden                 Int
   tipo                  String   // "multiple_choice" | "programming"
-  lenguajeProgramacion  String?       // "python" | "javascript" (solo para partes de programación)
+  lenguajeProgramacion  String?       // "python" | "javascript" | "c" (solo para partes de programación)
   intellisenseHabilitado Boolean @default(false) // solo para partes de programación
   enunciadoTipo         String   @default("texto") // "texto" | "archivo" (mutuamente excluyentes)
   enunciadoProgramacion String?       // enunciado en texto (solo si enunciadoTipo = "texto")
