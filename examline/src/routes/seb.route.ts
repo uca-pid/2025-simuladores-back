@@ -3,6 +3,9 @@ import { type PrismaClient } from "@prisma/client"
 import 'dotenv/config';
 import fs from "fs"
 import path from "path"
+import { authenticateToken, requireOwnership, requireRole } from "../middleware/auth.ts"
+import { getExamById } from "../services/exam.service.ts"
+import { generateSEBPreviewToken, verifySEBPreviewToken } from "../utils/jwt.ts"
 import {
   getExamWindowSEBSettings,
   buildSEBXml,
@@ -45,11 +48,7 @@ const ExamStartRoute = (prisma: PrismaClient) => {
 
     // Construir parámetros para el builder
     const params: SEBConfigParams = {
-      examId: Number(examId),
-      windowId: Number(windowId),
-      token,
       frontUrl,
-      backendUrl: backendBaseUrl,
       quitPassword: contra,
       settingsPassword: contra,
     }
@@ -75,17 +74,22 @@ const ExamStartRoute = (prisma: PrismaClient) => {
   })
 
   // Ruta para probar la configuración dinámica
-  router.post("/test-download", async (req: Request, res: Response) => {
+  router.post("/test-download", authenticateToken, requireRole(['professor']), requireOwnership(prisma, 'exam'), async (req: Request, res: Response) => {
     const settingsFromBody = req.body;
     const contra = "12345";
 
     const frontendBaseUrl = (process.env.FRONTEND_URL || "http://localhost:3000").replace(/\/$/, "");
     const backendBaseUrl = (process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 4000}`).replace(/\/$/, "");
+    const examId = Number(settingsFromBody.examId);
+
+    if (!Number.isInteger(examId) || examId < 1) {
+      return res.status(400).json({ error: "Selecciona un examen para probar la configuración" });
+    }
 
     // Generar configuración por defecto y sobrescribir con lo que viene del front
     const sebSettings: ExamWindowSEBSettings = {
       unsafeMode: settingsFromBody.sebUnsafeMode ?? false,
-      kioskMode: settingsFromBody.kioskMode ?? 0,
+      kioskMode: settingsFromBody.sebKioskMode ?? settingsFromBody.kioskMode ?? 0,
       showTaskBar: settingsFromBody.sebShowTaskBar ?? false,
       allowQuit: settingsFromBody.sebAllowQuit ?? true,
       browserViewMode: settingsFromBody.sebBrowserViewMode ?? 0,
@@ -117,14 +121,12 @@ const ExamStartRoute = (prisma: PrismaClient) => {
       enableTaskManager: settingsFromBody.sebEnableTaskManager ?? false,
     };
 
-    const frontUrl = `${frontendBaseUrl}/`; // URL de prueba, lleva al inicio
+    const previewToken = generateSEBPreviewToken(req.user!.userId, examId);
+    const previewUrl = new URL(`/exam-preview/${examId}`, frontendBaseUrl);
+    previewUrl.hash = new URLSearchParams({ previewToken }).toString();
 
     const params: SEBConfigParams = {
-      examId: 99999, // Dummy
-      windowId: 99999,
-      token: "test-token",
-      frontUrl,
-      backendUrl: backendBaseUrl,
+      frontUrl: previewUrl.toString(),
       quitPassword: contra,
       settingsPassword: contra,
     };
@@ -141,6 +143,31 @@ const ExamStartRoute = (prisma: PrismaClient) => {
     const backendHost = backendBaseUrl.replace(/^https?:\/\//, '');
     const sebUrl = `seb://${backendHost}/examenes/${fileName}`;
     res.json({ sebUrl });
+  })
+
+  router.get("/preview/:examId", async (req: Request, res: Response) => {
+    const examId = Number(req.params.examId);
+    const previewToken = req.header('Authorization')?.replace(/^Bearer\s+/i, '');
+
+    if (!Number.isInteger(examId) || examId < 1 || !previewToken) {
+      return res.status(401).json({ error: "Vista previa no autorizada" });
+    }
+
+    const userId = verifySEBPreviewToken(previewToken, examId);
+    if (!userId) {
+      return res.status(401).json({ error: "El acceso temporal a la vista previa expiró" });
+    }
+
+    try {
+      const result = await getExamById(prisma, examId, null, 'seb-preview', userId);
+      if (result.error) {
+        return res.status(result.error.status).json({ error: result.error.error });
+      }
+      return res.json(result.exam);
+    } catch (error) {
+      console.error('Error cargando vista previa SEB:', error);
+      return res.status(500).json({ error: "No se pudo cargar la vista previa" });
+    }
   })
 
   return router

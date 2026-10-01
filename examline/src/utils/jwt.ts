@@ -18,6 +18,12 @@ export interface JWTPayload {
   rol: string;
 }
 
+interface SEBPreviewPayload extends JwtPayload {
+  scope: 'seb-preview';
+  examId: number;
+  userId: number;
+}
+
 export const generateToken = (payload: JWTPayload): string => {
   return jwt.sign(payload, JWT_SECRET, { 
     expiresIn: JWT_EXPIRES_IN,
@@ -28,6 +34,9 @@ export const generateToken = (payload: JWTPayload): string => {
 export const verifyToken = (token: string): JWTPayload | null => {
   try {
     const decoded = jwt.verify(token, JWT_SECRET) as JWTPayload;
+    if ((decoded as JWTPayload & { scope?: string }).scope === 'seb-preview') {
+      return null;
+    }
     return decoded;
   } catch (error) {
     // Solo loguear en desarrollo o si es un error diferente a token expirado
@@ -41,4 +50,33 @@ export const verifyToken = (token: string): JWTPayload | null => {
 export const refreshToken = (payload: JWTPayload): string => {
   // Create a new token with the same payload but fresh expiry
   return generateToken(payload);
+};
+
+export const generateSEBPreviewToken = (userId: number, examId: number): string => {
+  return jwt.sign(
+    { scope: 'seb-preview', userId, examId },
+    JWT_SECRET,
+    { expiresIn: '10m', issuer: 'examline-app', audience: 'seb-preview' }
+  );
+};
+
+export const verifySEBPreviewToken = (token: string, examId: number): number | null => {
+  try {
+    const payload = jwt.verify(token, JWT_SECRET, {
+      issuer: 'examline-app',
+      audience: 'seb-preview'
+    }) as SEBPreviewPayload;
+
+    if (
+      payload.scope !== 'seb-preview' ||
+      payload.examId !== examId ||
+      !Number.isInteger(payload.userId)
+    ) {
+      return null;
+    }
+
+    return payload.userId;
+  } catch {
+    return null;
+  }
 };

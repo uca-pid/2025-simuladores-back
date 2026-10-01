@@ -297,6 +297,10 @@ export async function getExamById(
     return { error: { status: 404, error: "Examen no encontrado" } as ExamValidationError };
   }
 
+  if (userRole === 'seb-preview' && exam.profesorId !== userId) {
+    return { error: { status: 403, error: "No tienes permiso para ver este examen" } as ExamValidationError };
+  }
+
   // Auto-register history for students
   if (userRole === 'student') {
     await prisma.examHistory.upsert({
@@ -305,8 +309,12 @@ export async function getExamById(
       create: { userId, examId },
     });
 
+  }
+
+  if (userRole === 'student' || userRole === 'seb-preview') {
     // 🔒 SEGURIDAD: NO enviar respuestas correctas ni datos de test cases
     const sanitizedExam: any = { ...exam };
+    delete sanitizedExam.solucionReferencia;
 
     // Eliminar respuestas correctas de preguntas (EXCEPTO para matching y fill_in_blank)
     // Para matching y fill_in_blank, 'correcta' indica la CANTIDAD de elementos, no la respuesta

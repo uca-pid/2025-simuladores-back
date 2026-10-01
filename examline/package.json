@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "dev": "tsx src/index.ts",
-    "start": "nodemon index.ts",
+    "start": "nodemon --watch src --ext ts --exec tsx src/index.ts",
     "test": "jest"
   },
   "keywords": [],

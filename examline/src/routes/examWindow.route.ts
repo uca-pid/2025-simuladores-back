@@ -9,11 +9,65 @@ import {
 } from "../services/examWindow.service.ts";
 import { ExamTimeExtensionService } from "../services/examTimeExtension.service.ts";
 
+const sebBooleanFields = [
+  "sebUnsafeMode",
+  "sebShowTaskBar",
+  "sebAllowAddressBar",
+  "sebEnableBrowserWindowToolbar",
+  "sebAllowQuit",
+  "sebAllowReload",
+  "sebAllowBrowsingBackForward",
+  "sebEnableEsc",
+  "sebEnableAltTab",
+  "sebEnableAltEsc",
+  "sebEnableAltF4",
+  "sebEnableStartMenu",
+  "sebEnableRightMouse",
+  "sebEnablePrintScreen",
+  "sebEnableFunctionKeys",
+  "sebEnableCtrlEsc",
+  "sebEnableTaskManager",
+  "sebCreateNewDesktop",
+  "sebLockOnMessageSocketClose",
+  "sebAllowSwitchToApplications",
+  "sebAllowDeveloperConsole",
+  "sebAllowZoom",
+  "sebAllowTeams",
+  "sebBrowserWindowAllowMinimize",
+  "sebAllowDownloads",
+  "sebAllowUploads",
+] as const;
+
+const sebNumberFields = ["sebKioskMode", "sebBrowserViewMode", "sebClipboardPolicy"] as const;
+const sebStringFields = ["sebQuitUrl", "sebQuitPassword", "sebSettingsPassword"] as const;
+
+function getSEBSettings(body: Record<string, any>) {
+  const settings: Record<string, boolean | number | string> = {};
+
+  for (const field of sebBooleanFields) {
+    if (body[field] !== undefined) settings[field] = Boolean(body[field]);
+  }
+
+  for (const field of sebNumberFields) {
+    if (body[field] !== undefined) settings[field] = Number(body[field]);
+  }
+
+  for (const field of sebStringFields) {
+    if (body[field] !== undefined) settings[field] = String(body[field]);
+  }
+
+  if (settings.sebKioskMode === undefined && body.kioskMode !== undefined) {
+    settings.sebKioskMode = Number(body.kioskMode);
+  }
+
+  return settings;
+}
+
 const ExamWindowRoute = (prisma: PrismaClient) => {
   const router = Router();
 
   router.post('/', authenticateToken, requireRole(['professor']), async (req, res) => {
-  const { examId, nombre, fechaInicio, duracion, modalidad, cupoMaximo, notas, sinTiempo, usaSEB, kioskMode, sebUnsafeMode, sebAllowZoom, sebAllowTeams, sebBrowserWindowAllowMinimize, sebEnableTaskManager } = req.body;
+  const { examId, nombre, fechaInicio, duracion, modalidad, cupoMaximo, notas, sinTiempo, usaSEB, kioskMode } = req.body;
 
   try {
         const examIdNumber = parseInt(examId);
@@ -80,11 +134,7 @@ const ExamWindowRoute = (prisma: PrismaClient) => {
           notas: notas || null,
           sinTiempo: isSinTiempo,
           usaSEB: Boolean(usaSEB),
-          sebUnsafeMode: Boolean(sebUnsafeMode),
-          sebAllowZoom: Boolean(sebAllowZoom),
-          sebAllowTeams: Boolean(sebAllowTeams),
-          sebBrowserWindowAllowMinimize: Boolean(sebBrowserWindowAllowMinimize),
-          sebEnableTaskManager: Boolean(sebEnableTaskManager),
+          ...getSEBSettings(req.body),
           kioskMode: kioskMode,
           estado: isSinTiempo ? 'programada' : 'programada'
         };
@@ -276,7 +326,7 @@ router.get('/disponibles', authenticateToken, requireRole(['student']), async (r
   // Actualizar ventana de examen
   router.put('/:id', authenticateToken, requireRole(['professor']), async (req, res) => {
     const windowId = parseInt(req.params.id);
-    const { nombre, fechaInicio, duracion, modalidad, cupoMaximo, notas, activa, estado, usaSEB, sinTiempo } = req.body;
+    const { nombre, fechaInicio, duracion, modalidad, cupoMaximo, notas, activa, estado, usaSEB, sinTiempo, kioskMode } = req.body;
 
     try {
       // Verificar que la ventana existe y pertenece al profesor
@@ -305,6 +355,8 @@ router.get('/disponibles', authenticateToken, requireRole(['student']), async (r
       if (estado) updateData.estado = estado;
       if (usaSEB !== undefined) updateData.usaSEB = Boolean(usaSEB);
       if (sinTiempo !== undefined) updateData.sinTiempo = Boolean(sinTiempo);
+      if (kioskMode !== undefined) updateData.kioskMode = Number(kioskMode);
+      Object.assign(updateData, getSEBSettings(req.body));
 
       const updatedWindow = await prisma.examWindow.update({
         where: { id: windowId },
