@@ -1,8 +1,11 @@
 import { type PrismaClient } from "@prisma/client";
 import { Router } from "express";
 import bcrypt from "bcryptjs";
+import crypto from "crypto";
 import { generateToken, refreshToken } from "../utils/jwt.ts";
 import { authenticateToken, requireRole } from "../middleware/auth.ts";
+import { loginRateLimit, signupRateLimit, forgotPasswordRateLimit } from "../middleware/rateLimit.ts";
+import { sendPasswordResetEmail } from "../utils/email.ts";
 
 const UserRoute = (prisma: PrismaClient) => {
   const router = Router();
@@ -35,7 +38,7 @@ const UserRoute = (prisma: PrismaClient) => {
   });
 
 // Registrar usuario
-  router.post("/signup", async (req, res) => {
+  router.post("/signup", signupRateLimit, async (req, res) => {
     const { nombre, email, password, rol } = req.body;
 
     try {
@@ -81,7 +84,7 @@ const UserRoute = (prisma: PrismaClient) => {
 
 
   // Login
-router.post('/login', async (req, res) => {
+router.post('/login', loginRateLimit, async (req, res) => {
   const { email, password } = req.body;
 
   try {
@@ -128,6 +131,67 @@ router.post('/login', async (req, res) => {
     });
   }
 });
+
+  // Solicitar recuperación de contraseña
+  router.post('/forgot-password', forgotPasswordRateLimit, async (req, res) => {
+    const { email } = req.body;
+
+    try {
+      const user = await prisma.user.findUnique({ where: { email } });
+
+      // ❌ NO revelar si el email existe o no
+      if (user) {
+        const resetToken = crypto.randomBytes(32).toString('hex');
+        const resetTokenExpiry = new Date(Date.now() + 60 * 60 * 1000); // 1 hora
+
+        await prisma.user.update({
+          where: { id: user.id },
+          data: { resetToken, resetTokenExpiry },
+        });
+
+        await sendPasswordResetEmail(user.email, user.nombre, resetToken);
+      }
+
+      res.json({ message: 'Si el email está registrado, vas a recibir un link para restablecer tu contraseña.' });
+    } catch (error) {
+      console.error('Error al solicitar recuperación de contraseña:', error);
+      res.status(500).json({ error: 'Hubo un problema al procesar la solicitud.' });
+    }
+  });
+
+  // Restablecer contraseña con token
+  router.post('/reset-password/:token', async (req, res) => {
+    const { token } = req.params;
+    const { password } = req.body;
+
+    try {
+      if (!password) {
+        return res.status(400).json({ error: 'Debe ingresar una nueva contraseña.' });
+      }
+
+      const user = await prisma.user.findUnique({ where: { resetToken: token } });
+
+      if (!user || !user.resetTokenExpiry || user.resetTokenExpiry < new Date()) {
+        return res.status(400).json({ error: 'El link de recuperación es inválido o expiró.' });
+      }
+
+      const doubleHashedPassword = await bcrypt.hash(password, 10);
+
+      await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          password: doubleHashedPassword,
+          resetToken: null,
+          resetTokenExpiry: null,
+        },
+      });
+
+      res.json({ message: 'Contraseña actualizada correctamente.' });
+    } catch (error) {
+      console.error('Error al restablecer contraseña:', error);
+      res.status(500).json({ error: 'Hubo un problema al restablecer la contraseña.' });
+    }
+  });
 
   // Token refresh endpoint
   router.post('/refresh-token', authenticateToken, async (req, res) => {

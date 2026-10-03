@@ -22,8 +22,10 @@
     "crypto-js": "^4.2.0",
     "dotenv": "^17.2.2",
     "express": "^5.1.0",
+    "express-rate-limit": "^8.7.0",
     "jsonwebtoken": "^9.0.2",
-    "multer": "^2.4.0"
+    "multer": "^2.4.0",
+    "resend": "^6.32.0"
   },
   "devDependencies": {
     "@babel/preset-env": "^7.28.3",
