@@ -361,8 +361,14 @@ router.delete('/:id', authenticateToken, async (req, res) => {
         });
       }
 
-      // 7. Eliminar preguntas de los exámenes
+      // 7. Eliminar preguntas de los exámenes (Pregunta se relaciona por partId, no examId)
       await prisma.pregunta.deleteMany({
+        where: { parte: { examId: { in: examIds } } }
+      });
+
+      // 7.5. Eliminar las partes del examen (ExamPart no tiene onDelete: Cascade
+      // desde Exam, así que hay que borrarlas explícitamente antes del examen)
+      await prisma.examPart.deleteMany({
         where: { examId: { in: examIds } }
       });
 
@@ -391,6 +397,11 @@ router.delete('/:id', authenticateToken, async (req, res) => {
     // 12. Eliminar inscripciones del usuario
     await prisma.inscription.deleteMany({
       where: { userId: userId }
+    });
+
+    // 12.5. Eliminar preguntas del banco de preguntas del usuario (si es profesor)
+    await prisma.questionBank.deleteMany({
+      where: { profesorId: userId }
     });
 
     // 13. Finalmente, eliminar al usuario

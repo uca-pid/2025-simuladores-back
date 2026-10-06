@@ -65,6 +65,57 @@ export interface ExamValidationError {
  * Valida una parte del examen (multiple choice o programación) según su tipo.
  * Devuelve un ExamValidationError si algo es inválido, o null si está ok.
  */
+export const TIPOS_PREGUNTA_TEORICA = [
+  'multiple_choice', 'multiple_response', 'true_false', 'fill_in_blank', 'matching',
+  'short_answer', 'numeric', 'essay', 'file_upload'
+];
+const DIFICULTADES = ['facil', 'media', 'dificil'];
+
+function validatePregunta(pregunta: any, partIndex: number, pIndex: number): ExamValidationError | null {
+  const { tipo = 'multiple_choice', dificultad = 'media', texto } = pregunta;
+
+  if (!texto || !String(texto).trim()) {
+    return { status: 400, error: `Parte ${partIndex + 1}, pregunta ${pIndex + 1}: el texto es requerido` };
+  }
+  if (!TIPOS_PREGUNTA_TEORICA.includes(tipo)) {
+    return { status: 400, error: `Parte ${partIndex + 1}, pregunta ${pIndex + 1}: tipo de pregunta inválido` };
+  }
+  if (!DIFICULTADES.includes(dificultad)) {
+    return { status: 400, error: `Parte ${partIndex + 1}, pregunta ${pIndex + 1}: dificultad debe ser 'facil', 'media' o 'dificil'` };
+  }
+  if (pregunta.puntos !== undefined && (isNaN(Number(pregunta.puntos)) || Number(pregunta.puntos) <= 0)) {
+    return { status: 400, error: `Parte ${partIndex + 1}, pregunta ${pIndex + 1}: el puntaje debe ser un número mayor a 0` };
+  }
+  if (tipo === 'numeric') {
+    const [valorCorrecto, tolerancia] = Array.isArray(pregunta.opciones) ? pregunta.opciones : [];
+    if (valorCorrecto === undefined || valorCorrecto === '' || isNaN(Number(valorCorrecto))) {
+      return { status: 400, error: `Parte ${partIndex + 1}, pregunta ${pIndex + 1}: se requiere un valor numérico correcto` };
+    }
+    if (tolerancia !== undefined && tolerancia !== '' && isNaN(Number(tolerancia))) {
+      return { status: 400, error: `Parte ${partIndex + 1}, pregunta ${pIndex + 1}: la tolerancia debe ser numérica` };
+    }
+  }
+  if (tipo === 'short_answer') {
+    if (!Array.isArray(pregunta.opciones) || pregunta.opciones.length === 0 || pregunta.opciones.every((o: string) => !o?.trim())) {
+      return { status: 400, error: `Parte ${partIndex + 1}, pregunta ${pIndex + 1}: se requiere al menos una respuesta aceptada` };
+    }
+  }
+  if (tipo === 'multiple_response') {
+    if (!Array.isArray(pregunta.opciones) || pregunta.opciones.length < 2) {
+      return { status: 400, error: `Parte ${partIndex + 1}, pregunta ${pIndex + 1}: se requieren al menos 2 opciones` };
+    }
+    if (!Array.isArray(pregunta.correctas) || pregunta.correctas.length === 0) {
+      return { status: 400, error: `Parte ${partIndex + 1}, pregunta ${pIndex + 1}: se requiere marcar al menos una opción correcta` };
+    }
+    const fueraDeRango = pregunta.correctas.some((i: number) => i < 0 || i >= pregunta.opciones.length);
+    if (fueraDeRango) {
+      return { status: 400, error: `Parte ${partIndex + 1}, pregunta ${pIndex + 1}: hay índices de respuesta correcta inválidos` };
+    }
+  }
+
+  return null;
+}
+
 function validatePart(parte: any, index: number): ExamValidationError | null {
   const {
     tipo,
@@ -72,7 +123,10 @@ function validatePart(parte: any, index: number): ExamValidationError | null {
     enunciadoTipo = 'texto',
     enunciadoProgramacion,
     enunciadoUrl,
-    preguntas
+    preguntas,
+    cantidadFaciles,
+    cantidadMedias,
+    cantidadDificiles,
   } = parte;
 
   if (!['multiple_choice', 'programming'].includes(tipo)) {
@@ -95,6 +149,32 @@ function validatePart(parte: any, index: number): ExamValidationError | null {
   } else if (tipo === 'multiple_choice') {
     if (!preguntas || preguntas.length === 0) {
       return { status: 400, error: `Parte ${index + 1}: se requieren preguntas` };
+    }
+
+    for (let pIndex = 0; pIndex < preguntas.length; pIndex++) {
+      const preguntaError = validatePregunta(preguntas[pIndex], index, pIndex);
+      if (preguntaError) return preguntaError;
+    }
+
+    // Pool aleatorio balanceado por dificultad: si se definió alguna cantidad, deben
+    // definirse las 3 (0 es válido para "ninguna de ese nivel") y alcanzar con el pool.
+    const poolDefinido = [cantidadFaciles, cantidadMedias, cantidadDificiles].some(c => c !== undefined && c !== null);
+    if (poolDefinido) {
+      const counts = { facil: 0, media: 0, dificil: 0 } as Record<string, number>;
+      for (const p of preguntas) counts[p.dificultad || 'media']++;
+
+      const pedidos: Array<[string, number | undefined]> = [
+        ['facil', cantidadFaciles], ['media', cantidadMedias], ['dificil', cantidadDificiles]
+      ];
+      for (const [nivel, cantidad] of pedidos) {
+        const n = cantidad ?? 0;
+        if (n < 0) {
+          return { status: 400, error: `Parte ${index + 1}: la cantidad a sortear de ${nivel} no puede ser negativa` };
+        }
+        if (n > counts[nivel]) {
+          return { status: 400, error: `Parte ${index + 1}: pediste sortear ${n} pregunta(s) de dificultad '${nivel}' pero el pool solo tiene ${counts[nivel]}` };
+        }
+      }
     }
   }
 
@@ -170,6 +250,14 @@ export async function createExam(
         partData.codigoInicial = parte.codigoInicial || '';
         partData.testCases = parte.testCases || [];
         partData.solucionReferencia = parte.solucionReferencia || null;
+      } else if (parte.tipo === 'multiple_choice') {
+        const poolDefinido = [parte.cantidadFaciles, parte.cantidadMedias, parte.cantidadDificiles]
+          .some(c => c !== undefined && c !== null);
+        if (poolDefinido) {
+          partData.cantidadFaciles = parte.cantidadFaciles ?? 0;
+          partData.cantidadMedias = parte.cantidadMedias ?? 0;
+          partData.cantidadDificiles = parte.cantidadDificiles ?? 0;
+        }
       }
 
       const createdPart = await tx.examPart.create({ data: partData });
@@ -179,9 +267,12 @@ export async function createExam(
           data: parte.preguntas.map((p: any, pIndex: number) => ({
             partId: createdPart.id,
             tipo: p.tipo || 'multiple_choice',
+            dificultad: p.dificultad || 'media',
             texto: p.texto,
-            correcta: p.correcta,
-            opciones: p.opciones,
+            correcta: p.correcta ?? null,
+            correctas: p.correctas ?? null,
+            puntos: p.puntos ?? 1,
+            opciones: p.opciones ?? [],
             orden: p.orden ?? pIndex + 1,
             imagenUrl: p.imagenUrl || null,
           }))
@@ -583,6 +674,14 @@ export async function updateExam(
           partData.codigoInicial = parte.codigoInicial || '';
           partData.testCases = parte.testCases || [];
           partData.solucionReferencia = parte.solucionReferencia || null;
+        } else if (parte.tipo === 'multiple_choice') {
+          const poolDefinido = [parte.cantidadFaciles, parte.cantidadMedias, parte.cantidadDificiles]
+            .some(c => c !== undefined && c !== null);
+          if (poolDefinido) {
+            partData.cantidadFaciles = parte.cantidadFaciles ?? 0;
+            partData.cantidadMedias = parte.cantidadMedias ?? 0;
+            partData.cantidadDificiles = parte.cantidadDificiles ?? 0;
+          }
         }
 
         const createdPart = await tx.examPart.create({ data: partData });
@@ -592,9 +691,12 @@ export async function updateExam(
             data: parte.preguntas.map((p: any, pIndex: number) => ({
               partId: createdPart.id,
               tipo: p.tipo || 'multiple_choice',
+              dificultad: p.dificultad || 'media',
               texto: p.texto,
-              correcta: p.correcta,
-              opciones: p.opciones,
+              correcta: p.correcta ?? null,
+              correctas: p.correctas ?? null,
+              puntos: p.puntos ?? 1,
+              opciones: p.opciones ?? [],
               orden: p.orden ?? pIndex + 1,
               imagenUrl: p.imagenUrl || null,
             }))

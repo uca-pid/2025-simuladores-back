@@ -55,6 +55,12 @@ model ExamPart {
   codigoInicial         String?       // código inicial/template para partes de programación
   testCases             Json?         // casos de prueba para evaluación automática de partes de programación
   solucionReferencia    String?       // solución de referencia del profesor (solo visible para él)
+  // Pool aleatorio balanceado por dificultad (solo partes "multiple_choice"): si los 3 campos son
+  // null, se usan todas las `preguntas` tal cual (comportamiento actual). Si tienen valores, al
+  // iniciar el intento se sortea esa cantidad de cada nivel de dificultad del pool de `preguntas`.
+  cantidadFaciles       Int?
+  cantidadMedias        Int?
+  cantidadDificiles     Int?
   exam                  Exam     @relation(fields: [examId], references: [id])
   preguntas             Pregunta[]
 
@@ -63,16 +69,23 @@ model ExamPart {
 
 model Pregunta {
   id       Int    @id @default(autoincrement())
-  tipo     String @default("multiple_choice") // "multiple_choice" | "true_false" | "fill_in_blank" | "matching"
+  tipo     String @default("multiple_choice") // "multiple_choice" | "multiple_response" | "true_false" | "fill_in_blank" | "matching" | "short_answer" | "numeric" | "essay" | "file_upload"
+  dificultad String @default("media") // "facil" | "media" | "dificil"
   texto    String
-  opciones Json   // Array de opciones. Formato según tipo:
-                  // - multiple_choice/true_false: array simple de strings
+  opciones Json   @default("[]") // Array de opciones. Formato según tipo:
+                  // - multiple_choice/multiple_response/true_false: array simple de strings
                   // - fill_in_blank: [respuestasCorrectas..., distractores...]
                   // - matching: [conceptos..., respuestas...]
-  correcta Int    // Valor según tipo:
+                  // - short_answer: array de respuestas aceptadas (comparación case-insensitive)
+                  // - numeric: [valorCorrecto, tolerancia] (ambos como string numérico)
+                  // - essay/file_upload: no se usa, queda []
+  correcta Int?   // Valor según tipo:
                   // - multiple_choice/true_false: índice de la opción correcta
                   // - fill_in_blank: cantidad de respuestas correctas (divide el array opciones)
                   // - matching: cantidad de conceptos (divide el array opciones)
+                  // - short_answer/numeric/essay/file_upload/multiple_response: no se usa (null)
+  correctas Json? // Solo multiple_response: array de índices de las opciones correctas (selección múltiple)
+  puntos   Float  @default(1) // Peso/puntaje de esta pregunta dentro de la parte (default 1 = todas equivalen igual, como antes)
   orden    Int?
   imagenUrl String?
   partId   Int
@@ -203,7 +216,11 @@ model RespuestaEstudiante {
   id         Int         @id @default(autoincrement())
   attemptId  Int
   preguntaId Int
-  valor      Json        // Puede ser un índice (Int) para multiple choice/true_false, o un array para fill_in_blank/matching
+  valor      Json        // Puede ser un índice (Int) para multiple choice/true_false, un array para fill_in_blank/matching,
+                          // un string para short_answer/numeric/essay, o null para file_upload (ver archivoUrl)
+  archivoUrl String?      // URL del archivo subido por el estudiante (solo para preguntas tipo file_upload)
+  puntajeManual Float?    // calificación manual por pregunta (solo essay/file_upload, corregida por el profesor)
+  corregidaManualmente Boolean @default(false) // si ya fue revisada por el profesor (permite distinguir de "sin corregir aún")
   attempt    ExamAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
   pregunta   Pregunta    @relation(fields: [preguntaId], references: [id], onDelete: Cascade)
 
@@ -230,17 +247,19 @@ model ExamFile {
 model QuestionBank {
   id        Int      @id @default(autoincrement())
   profesorId Int
-  tipo      String   @default("multiple_choice") // "multiple_choice" | "true_false" | "fill_in_blank" | "matching"
+  tipo      String   @default("multiple_choice") // "multiple_choice" | "multiple_response" | "true_false" | "fill_in_blank" | "matching" | "short_answer" | "numeric" | "essay" | "file_upload"
+  dificultad String  @default("media") // "facil" | "media" | "dificil"
   titulo    String   @default("Sin título")
   texto     String
-  opciones  Json     // Array de opciones. Formato según tipo:
-                    // - multiple_choice/true_false: array simple de strings
+  opciones  Json     @default("[]") // Array de opciones. Formato según tipo:
+                    // - multiple_choice/multiple_response/true_false: array simple de strings
                     // - fill_in_blank: [respuestasCorrectas..., distractores...]
                     // - matching: [conceptos..., respuestas...]
-  correcta  Int      // Valor según tipo:
-                    // - multiple_choice/true_false: índice de la opción correcta
-                    // - fill_in_blank: cantidad de respuestas correctas (divide el array opciones)
-                    // - matching: cantidad de conceptos (divide el array opciones)
+                    // - short_answer: array de respuestas aceptadas
+                    // - numeric: [valorCorrecto, tolerancia]
+                    // - essay/file_upload: no se usa, queda []
+  correcta  Int?     // Valor según tipo (ver Pregunta); null para short_answer/numeric/essay/file_upload/multiple_response
+  correctas Json?    // Solo multiple_response: array de índices de las opciones correctas
   tags      Json     @default("[]")
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

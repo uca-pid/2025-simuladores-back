@@ -37,9 +37,11 @@ router.post("/", authenticateToken, async (req, res) => {
       return res.status(403).json({ error: "Solo los profesores pueden crear preguntas en el banco" });
     }
 
-    const { tipo, titulo, texto, opciones, correcta, tags } = req.body;
+    const { tipo, dificultad, titulo, texto, opciones, correcta, correctas, tags } = req.body;
+    // essay/file_upload no tienen respuesta correcta predefinida (corrección manual)
+    const requiereCorrecta = !["essay", "file_upload", "multiple_response"].includes(tipo || "multiple_choice");
 
-    if (!texto || !opciones || correcta === undefined) {
+    if (!texto || !opciones || (requiereCorrecta && correcta === undefined)) {
       return res.status(400).json({ error: "Faltan campos requeridos" });
     }
 
@@ -47,10 +49,12 @@ router.post("/", authenticateToken, async (req, res) => {
       data: {
         profesorId: userId,
         tipo: tipo || "multiple_choice",
+        dificultad: dificultad || "media",
         titulo: titulo || "Sin título",
         texto,
         opciones,
-        correcta,
+        correcta: requiereCorrecta ? correcta : null,
+        correctas: tipo === "multiple_response" ? (correctas ?? null) : null,
         tags: tags || []
       }
     });
@@ -67,7 +71,7 @@ router.put("/:id", authenticateToken, async (req, res) => {
   try {
     const userId = (req as any).user.userId;
     const questionId = parseInt(req.params.id);
-    const { tipo, titulo, texto, opciones, correcta, tags } = req.body;
+    const { tipo, dificultad, titulo, texto, opciones, correcta, correctas, tags } = req.body;
 
     const question = await prisma.questionBank.findUnique({
       where: { id: questionId }
@@ -81,15 +85,20 @@ router.put("/:id", authenticateToken, async (req, res) => {
       return res.status(403).json({ error: "No tienes permiso para editar esta pregunta" });
     }
 
+    const tipoFinal = tipo || question.tipo;
+    const requiereCorrecta = !["essay", "file_upload", "multiple_response"].includes(tipoFinal);
+
     const updatedQuestion = await prisma.questionBank.update({
       where: { id: questionId },
-      data: { 
-        tipo: tipo || question.tipo,
+      data: {
+        tipo: tipoFinal,
+        dificultad: dificultad || question.dificultad,
         titulo: titulo || question.titulo,
-        texto, 
-        opciones, 
-        correcta, 
-        tags: tags !== undefined ? tags : question.tags 
+        texto,
+        opciones,
+        correcta: requiereCorrecta ? correcta : null,
+        correctas: tipoFinal === "multiple_response" ? (correctas ?? question.correctas) : null,
+        tags: tags !== undefined ? tags : question.tags
       }
     });
 

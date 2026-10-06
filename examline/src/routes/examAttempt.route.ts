@@ -1,5 +1,7 @@
 import { type PrismaClient } from "@prisma/client";
 import { Router } from "express";
+import multer from "multer";
+import { v2 as cloudinary } from "cloudinary";
 import { authenticateToken, requireRole } from "../middleware/auth.ts";
 import {
   validateAttemptStart,
@@ -12,8 +14,73 @@ import {
   continueToNextPart,
 } from "../services/examAttempt.service.ts";
 
+const ALLOWED_ANSWER_FILE_TYPES: Record<string, string> = {
+  "application/pdf": ".pdf",
+  "image/jpeg": ".jpg",
+  "image/png": ".png",
+  "image/webp": ".webp",
+};
+
+const answerFileUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+  fileFilter: (_req, file, cb) => {
+    if (ALLOWED_ANSWER_FILE_TYPES[file.mimetype]) {
+      cb(null, true);
+    } else {
+      cb(new Error("Solo se permiten archivos PDF, JPEG, PNG o WEBP"));
+    }
+  }
+});
+
+const uploadAnswerFileToCloudinary = (buffer: Buffer, publicId: string): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(
+      { resource_type: "raw", folder: "student-answer-files", public_id: publicId },
+      (err, result) => {
+        if (err || !result) return reject(err);
+        resolve(result.secure_url);
+      }
+    );
+    stream.end(buffer);
+  });
+};
+
 const ExamAttemptRoute = (prisma: PrismaClient) => {
   const router = Router();
+
+  // POST /exam-attempts/upload-answer-file (protected - students only)
+  // Sube el archivo que un alumno adjunta como respuesta a una pregunta tipo "file_upload"
+  router.post(
+    "/upload-answer-file",
+    authenticateToken,
+    requireRole(['student']),
+    (req, res) => {
+      answerFileUpload.single("archivo")(req, res, async (err: any) => {
+        if (err) {
+          const message = err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE'
+            ? "El archivo supera el tamaño máximo permitido (10MB)"
+            : err.message || "Error al subir el archivo";
+          return res.status(400).json({ error: message });
+        }
+
+        if (!req.file) {
+          return res.status(400).json({ error: "Debe adjuntar un archivo" });
+        }
+
+        try {
+          const ext = ALLOWED_ANSWER_FILE_TYPES[req.file.mimetype];
+          const publicId = `${req.user!.userId}-${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`;
+          const url = await uploadAnswerFileToCloudinary(req.file.buffer, publicId);
+
+          res.status(201).json({ url });
+        } catch (uploadErr) {
+          console.error('Error subiendo archivo de respuesta a Cloudinary:', uploadErr);
+          res.status(500).json({ error: "Error al subir el archivo al storage" });
+        }
+      });
+    }
+  );
 
   // POST /exam-attempts/start - Iniciar un intento de examen (students only)
   router.post("/start", authenticateToken, requireRole(['student']), async (req, res) => {
@@ -443,7 +510,8 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
               nombre: true,
               email: true
             }
-          }
+          },
+          respuestas: { include: { pregunta: true } }
         }
       });
 

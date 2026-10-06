@@ -55,6 +55,45 @@ export async function validateAttemptStart(
   return null;
 }
 
+/** Baraja un array in-place con Fisher-Yates y lo devuelve (nuevo array, no muta el original). */
+function shuffle<T>(arr: T[]): T[] {
+  const copia = [...arr];
+  for (let i = copia.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [copia[i], copia[j]] = [copia[j], copia[i]];
+  }
+  return copia;
+}
+
+/** Una parte tiene pool balanceado si definió alguna cantidad por dificultad (0 es válido). */
+function tienePoolBalanceado(parte: { cantidadFaciles: number | null; cantidadMedias: number | null; cantidadDificiles: number | null }) {
+  return parte.cantidadFaciles !== null || parte.cantidadMedias !== null || parte.cantidadDificiles !== null;
+}
+
+/**
+ * Determina qué preguntas le tocan a un alumno para una parte dada. Si la parte no tiene
+ * pool balanceado configurado, devuelve todas sus preguntas (comportamiento legacy). Si lo
+ * tiene, sortea aleatoriamente `cantidadX` preguntas de cada nivel de dificultad del pool
+ * completo de esa parte -- así todos los alumnos reciben la misma cantidad de fáciles/medias/
+ * difíciles, sin importar qué preguntas puntuales les tocaron (sorteo justo, ver conversación).
+ */
+function seleccionarPreguntasDeParte<T extends { id: number; dificultad: string }>(
+  parte: { preguntas: T[]; cantidadFaciles: number | null; cantidadMedias: number | null; cantidadDificiles: number | null }
+): T[] {
+  if (!tienePoolBalanceado(parte)) {
+    return parte.preguntas;
+  }
+
+  const porNivel = (nivel: string) => parte.preguntas.filter(p => p.dificultad === nivel);
+  const tomarAlAzar = (pool: T[], cantidad: number | null) => shuffle(pool).slice(0, cantidad ?? 0);
+
+  return [
+    ...tomarAlAzar(porNivel('facil'), parte.cantidadFaciles),
+    ...tomarAlAzar(porNivel('media'), parte.cantidadMedias),
+    ...tomarAlAzar(porNivel('dificil'), parte.cantidadDificiles),
+  ];
+}
+
 /**
  * Busca un intento existente para userId/examId/examWindowId (o crea uno nuevo si no existe),
  * generando el orden aleatorio de preguntas cuando corresponda. Maneja la condición de carrera
@@ -99,18 +138,15 @@ export async function findOrCreateAttempt(
     estado: "en_progreso"
   };
 
-  // Todas las preguntas de todas las partes (el orden aleatorio se mezcla dentro
-  // de cada parte por separado, preservando el orden de las partes).
-  const allPreguntas = exam.partes.flatMap(p => p.preguntas);
+  // Para cada parte: si tiene pool balanceado configurado (cantidadFaciles/Medias/Dificiles),
+  // sortea esa cantidad de cada nivel de dificultad del pool completo de `preguntas` de esa
+  // parte. Si no, usa todas las preguntas de la parte tal cual (comportamiento legacy).
+  // Dentro de cada parte el resultado se mezcla si el examen tiene ordenAleatorio, preservando
+  // siempre el orden entre partes.
+  const poolSeleccionado = exam.partes.flatMap(p => seleccionarPreguntasDeParte(p));
 
-  // Si el examen tiene orden aleatorio, generar y guardar el orden randomizado
-  if (exam.ordenAleatorio && allPreguntas.length > 0) {
-    // Crear array de IDs y randomizar usando Fisher-Yates
-    const preguntaIds = allPreguntas.map(p => p.id);
-    for (let i = preguntaIds.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [preguntaIds[i], preguntaIds[j]] = [preguntaIds[j], preguntaIds[i]];
-    }
+  if (exam.ordenAleatorio || exam.partes.some(p => tienePoolBalanceado(p))) {
+    const preguntaIds = exam.ordenAleatorio ? shuffle(poolSeleccionado.map(p => p.id)) : poolSeleccionado.map(p => p.id);
     attemptData.ordenPreguntas = preguntaIds;
   }
 
@@ -308,13 +344,34 @@ export async function prepareMultipleChoiceFinishData(
     include: { preguntas: true }
   });
 
-  if (parte && parte.preguntas && parte.preguntas.length > 0) {
-    let correctas = 0;
-    const totalPreguntas = parte.preguntas.length;
+  // Si el examen usa pool balanceado y/o orden aleatorio, `ordenPreguntas` tiene
+  // exactamente el subconjunto de preguntas que le tocó a ESTE alumno (puede ser
+  // menor al pool completo de la parte). Hay que calificar solo sobre esas,
+  // nunca sobre el pool entero, o el denominador quedaría mal para el alumno.
+  const attempt = await prisma.examAttempt.findUnique({ where: { id: attemptId } });
+  const ordenPreguntas = Array.isArray(attempt?.ordenPreguntas) ? attempt!.ordenPreguntas as number[] : null;
+
+  const preguntasAEvaluar = parte && ordenPreguntas
+    ? parte.preguntas.filter(p => ordenPreguntas.includes(p.id))
+    : parte?.preguntas;
+
+  if (preguntasAEvaluar && preguntasAEvaluar.length > 0) {
+    // Puntaje ponderado: cada pregunta auto-corregible suma su `puntos` (peso)
+    // si la respuesta es correcta, sobre el total de puntos posibles (no la
+    // cantidad de preguntas) -- así una pregunta que vale más pesa más en la nota.
+    let puntosObtenidos = 0;
+
+    // Essay y Archivo Adjunto no tienen corrección automática: el profesor las
+    // califica manualmente (ver ManualGradingModal). No entran en este cálculo;
+    // el profesor ajusta la nota final con `calificacionManual` una vez leídas.
+    const preguntasAutoCorregibles = preguntasAEvaluar.filter(
+      p => p.tipo !== 'essay' && p.tipo !== 'file_upload'
+    );
+    const totalPuntos = preguntasAutoCorregibles.reduce((sum, p) => sum + (p.puntos || 1), 0);
 
     // IMPORTANTE: Las respuestas ahora vienen con preguntaId como key (no índice)
     // para soportar orden aleatorio de preguntas
-    parte.preguntas.forEach((pregunta) => {
+    preguntasAutoCorregibles.forEach((pregunta) => {
       const respuestaEstudiante = respuestas?.[pregunta.id];
 
       if (respuestaEstudiante === undefined || respuestaEstudiante === null) {
@@ -354,7 +411,7 @@ export async function prepareMultipleChoiceFinishData(
             }
 
             if (todasCorrectas) {
-              correctas++;
+              puntosObtenidos += (pregunta.puntos || 1);
             }
           }
         }
@@ -383,21 +440,56 @@ export async function prepareMultipleChoiceFinishData(
             }
 
             if (todasCorrectas) {
-              correctas++;
+              puntosObtenidos += (pregunta.puntos || 1);
             }
+          }
+        }
+      } else if (pregunta.tipo === 'short_answer') {
+        // La respuesta aceptable se compara sin distinguir mayúsculas/espacios extra;
+        // `opciones` tiene todas las variantes de respuesta aceptadas por el profesor.
+        if (Array.isArray(pregunta.opciones)) {
+          const estudianteTexto = String(respuestaEstudiante || '').trim().toLowerCase();
+          const aceptadas = pregunta.opciones.map((o: string) => String(o || '').trim().toLowerCase());
+          if (estudianteTexto && aceptadas.includes(estudianteTexto)) {
+            puntosObtenidos += (pregunta.puntos || 1);
+          }
+        }
+      } else if (pregunta.tipo === 'numeric') {
+        // opciones = [valorCorrecto, tolerancia]
+        if (Array.isArray(pregunta.opciones)) {
+          const valorCorrecto = Number(pregunta.opciones[0]);
+          const tolerancia = Number(pregunta.opciones[1]) || 0;
+          const valorEstudiante = Number(respuestaEstudiante);
+          if (!isNaN(valorEstudiante) && Math.abs(valorEstudiante - valorCorrecto) <= tolerancia) {
+            puntosObtenidos += (pregunta.puntos || 1);
+          }
+        }
+      } else if (pregunta.tipo === 'multiple_response') {
+        // Selección múltiple (checkbox): correcta solo si marcó EXACTAMENTE el
+        // mismo conjunto de opciones que `correctas` (sin importar el orden).
+        if (Array.isArray(respuestaEstudiante) && Array.isArray(pregunta.correctas)) {
+          const marcadas = [...respuestaEstudiante].sort((a, b) => a - b);
+          const esperadas = [...pregunta.correctas].sort((a: number, b: number) => a - b);
+          const mismoConjunto = marcadas.length === esperadas.length &&
+            marcadas.every((v, idx) => v === esperadas[idx]);
+          if (mismoConjunto) {
+            puntosObtenidos += (pregunta.puntos || 1);
           }
         }
       } else {
         // Para multiple_choice y true_false, comparar índice directamente
         if (respuestaEstudiante === pregunta.correcta) {
-          correctas++;
+          puntosObtenidos += (pregunta.puntos || 1);
         }
       }
     });
 
-    // Calcular puntaje sobre 100
-    const puntaje = (correctas / totalPreguntas) * 100;
-    updateData.puntaje = puntaje;
+    // Calcular puntaje sobre 100 (si la parte es 100% essay/archivo adjunto, queda
+    // en null hasta que el profesor la corrija manualmente).
+    if (totalPuntos > 0) {
+      const puntaje = (puntosObtenidos / totalPuntos) * 100;
+      updateData.puntaje = puntaje;
+    }
   }
 
   return updateData;
