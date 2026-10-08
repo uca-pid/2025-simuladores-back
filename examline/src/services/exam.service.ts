@@ -124,6 +124,7 @@ function validatePart(parte: any, index: number): ExamValidationError | null {
     enunciadoProgramacion,
     enunciadoUrl,
     preguntas,
+    testCases,
     cantidadFaciles,
     cantidadMedias,
     cantidadDificiles,
@@ -145,6 +146,15 @@ function validatePart(parte: any, index: number): ExamValidationError | null {
     }
     if (enunciadoTipo === 'archivo' && !enunciadoUrl) {
       return { status: 400, error: `Parte ${index + 1}: se requiere subir el archivo de consigna` };
+    }
+
+    // Sin al menos un test case con output esperado, el auto-grading de esta
+    // parte queda roto para todos los alumnos (compararía contra "").
+    const testCasesValidos = Array.isArray(testCases)
+      ? testCases.filter((tc: any) => tc?.expectedOutput && String(tc.expectedOutput).trim())
+      : [];
+    if (testCasesValidos.length === 0) {
+      return { status: 400, error: `Parte ${index + 1}: se requiere al menos un test case con el output esperado completo` };
     }
   } else if (tipo === 'multiple_choice') {
     if (!preguntas || preguntas.length === 0) {
@@ -198,7 +208,7 @@ export async function createExam(
     referenceFiles // Array de archivos de referencia (legacy, aplicado al examen completo)
   } = body;
 
-  if (!titulo) {
+  if (!titulo || !titulo.trim()) {
     return { error: { status: 400, error: "El título es requerido" } as ExamValidationError };
   }
 
@@ -609,8 +619,12 @@ export async function updateExam(
 
   const { titulo, ordenAleatorio, partes, referenceFiles } = body;
 
+  if (titulo !== undefined && !titulo.trim()) {
+    return { error: { status: 400, error: "El título es requerido" } as ExamValidationError };
+  }
+
   const basicUpdateData: any = {};
-  if (titulo !== undefined) basicUpdateData.titulo = titulo;
+  if (titulo !== undefined) basicUpdateData.titulo = titulo.trim();
   if (ordenAleatorio !== undefined) basicUpdateData.ordenAleatorio = !!ordenAleatorio;
 
   let contentEditWarning: ExamValidationError | null = null;
