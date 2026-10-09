@@ -78,8 +78,14 @@ function tienePoolBalanceado(parte: { cantidadFaciles: number | null; cantidadMe
  * difíciles, sin importar qué preguntas puntuales les tocaron (sorteo justo, ver conversación).
  */
 function seleccionarPreguntasDeParte<T extends { id: number; dificultad: string }>(
-  parte: { preguntas: T[]; cantidadFaciles: number | null; cantidadMedias: number | null; cantidadDificiles: number | null }
+  parte: { preguntas: T[]; cantidadFaciles: number | null; cantidadMedias: number | null; cantidadDificiles: number | null; cantidadPreguntas: number | null }
 ): T[] {
+  if (parte.cantidadPreguntas !== null) {
+    const idsSeleccionados = new Set(
+      shuffle(parte.preguntas).slice(0, parte.cantidadPreguntas).map(pregunta => pregunta.id)
+    );
+    return parte.preguntas.filter(pregunta => idsSeleccionados.has(pregunta.id));
+  }
   if (!tienePoolBalanceado(parte)) {
     return parte.preguntas;
   }
@@ -87,11 +93,17 @@ function seleccionarPreguntasDeParte<T extends { id: number; dificultad: string 
   const porNivel = (nivel: string) => parte.preguntas.filter(p => p.dificultad === nivel);
   const tomarAlAzar = (pool: T[], cantidad: number | null) => shuffle(pool).slice(0, cantidad ?? 0);
 
-  return [
+  const seleccionadas = [
     ...tomarAlAzar(porNivel('facil'), parte.cantidadFaciles),
     ...tomarAlAzar(porNivel('media'), parte.cantidadMedias),
     ...tomarAlAzar(porNivel('dificil'), parte.cantidadDificiles),
   ];
+
+  // La dificultad define el pool del que se elige, no el orden de presentación.
+  // Si el examen no está configurado como aleatorio, el orden debe seguir siendo
+  // el establecido por el profesor.
+  const idsSeleccionados = new Set(seleccionadas.map(pregunta => pregunta.id));
+  return parte.preguntas.filter(pregunta => idsSeleccionados.has(pregunta.id));
 }
 
 /**
@@ -145,7 +157,7 @@ export async function findOrCreateAttempt(
   // siempre el orden entre partes.
   const poolSeleccionado = exam.partes.flatMap(p => seleccionarPreguntasDeParte(p));
 
-  if (exam.ordenAleatorio || exam.partes.some(p => tienePoolBalanceado(p))) {
+  if (exam.ordenAleatorio || exam.partes.some(p => tienePoolBalanceado(p) || p.cantidadPreguntas !== null)) {
     const preguntaIds = exam.ordenAleatorio ? shuffle(poolSeleccionado.map(p => p.id)) : poolSeleccionado.map(p => p.id);
     attemptData.ordenPreguntas = preguntaIds;
   }

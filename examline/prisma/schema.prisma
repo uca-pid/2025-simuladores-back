@@ -61,6 +61,7 @@ model ExamPart {
   cantidadFaciles       Int?
   cantidadMedias        Int?
   cantidadDificiles     Int?
+  cantidadPreguntas     Int?     // subconjunto aleatorio sin distribución por dificultad
   exam                  Exam     @relation(fields: [examId], references: [id])
   preguntas             Pregunta[]
 

@@ -128,6 +128,7 @@ function validatePart(parte: any, index: number): ExamValidationError | null {
     cantidadFaciles,
     cantidadMedias,
     cantidadDificiles,
+    cantidadPreguntas,
   } = parte;
 
   if (!['multiple_choice', 'programming'].includes(tipo)) {
@@ -168,8 +169,13 @@ function validatePart(parte: any, index: number): ExamValidationError | null {
 
     // Pool aleatorio balanceado por dificultad: si se definió alguna cantidad, deben
     // definirse las 3 (0 es válido para "ninguna de ese nivel") y alcanzar con el pool.
-    const poolDefinido = [cantidadFaciles, cantidadMedias, cantidadDificiles].some(c => c !== undefined && c !== null);
+    const poolDefinido = [cantidadFaciles, cantidadMedias, cantidadDificiles, cantidadPreguntas]
+      .some(c => c !== undefined && c !== null);
     if (poolDefinido) {
+      if (cantidadPreguntas !== undefined && cantidadPreguntas !== null &&
+        (!Number.isInteger(cantidadPreguntas) || cantidadPreguntas < 1 || cantidadPreguntas > preguntas.length)) {
+        return { status: 400, error: `Parte ${index + 1}: la cantidad aleatoria debe ser un entero entre 1 y ${preguntas.length}` };
+      }
       const counts = { facil: 0, media: 0, dificil: 0 } as Record<string, number>;
       for (const p of preguntas) counts[p.dificultad || 'media']++;
 
@@ -178,8 +184,8 @@ function validatePart(parte: any, index: number): ExamValidationError | null {
       ];
       for (const [nivel, cantidad] of pedidos) {
         const n = cantidad ?? 0;
-        if (n < 0) {
-          return { status: 400, error: `Parte ${index + 1}: la cantidad a sortear de ${nivel} no puede ser negativa` };
+        if (!Number.isInteger(n) || n < 0) {
+          return { status: 400, error: `Parte ${index + 1}: la cantidad a sortear de ${nivel} debe ser un entero mayor o igual a 0` };
         }
         if (n > counts[nivel]) {
           return { status: 400, error: `Parte ${index + 1}: pediste sortear ${n} pregunta(s) de dificultad '${nivel}' pero el pool solo tiene ${counts[nivel]}` };
@@ -261,12 +267,13 @@ export async function createExam(
         partData.testCases = parte.testCases || [];
         partData.solucionReferencia = parte.solucionReferencia || null;
       } else if (parte.tipo === 'multiple_choice') {
-        const poolDefinido = [parte.cantidadFaciles, parte.cantidadMedias, parte.cantidadDificiles]
+        const poolDefinido = [parte.cantidadFaciles, parte.cantidadMedias, parte.cantidadDificiles, parte.cantidadPreguntas]
           .some(c => c !== undefined && c !== null);
         if (poolDefinido) {
-          partData.cantidadFaciles = parte.cantidadFaciles ?? 0;
-          partData.cantidadMedias = parte.cantidadMedias ?? 0;
-          partData.cantidadDificiles = parte.cantidadDificiles ?? 0;
+          partData.cantidadFaciles = parte.cantidadFaciles ?? null;
+          partData.cantidadMedias = parte.cantidadMedias ?? null;
+          partData.cantidadDificiles = parte.cantidadDificiles ?? null;
+          partData.cantidadPreguntas = parte.cantidadPreguntas ?? null;
         }
       }
 
@@ -689,12 +696,13 @@ export async function updateExam(
           partData.testCases = parte.testCases || [];
           partData.solucionReferencia = parte.solucionReferencia || null;
         } else if (parte.tipo === 'multiple_choice') {
-          const poolDefinido = [parte.cantidadFaciles, parte.cantidadMedias, parte.cantidadDificiles]
+          const poolDefinido = [parte.cantidadFaciles, parte.cantidadMedias, parte.cantidadDificiles, parte.cantidadPreguntas]
             .some(c => c !== undefined && c !== null);
           if (poolDefinido) {
-            partData.cantidadFaciles = parte.cantidadFaciles ?? 0;
-            partData.cantidadMedias = parte.cantidadMedias ?? 0;
-            partData.cantidadDificiles = parte.cantidadDificiles ?? 0;
+            partData.cantidadFaciles = parte.cantidadFaciles ?? null;
+            partData.cantidadMedias = parte.cantidadMedias ?? null;
+            partData.cantidadDificiles = parte.cantidadDificiles ?? null;
+            partData.cantidadPreguntas = parte.cantidadPreguntas ?? null;
           }
         }
 
