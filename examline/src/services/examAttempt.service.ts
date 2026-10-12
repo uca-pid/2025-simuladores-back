@@ -198,8 +198,8 @@ export async function evaluateProgrammingTestCases(
   const CodeExecutionService = (await import('./codeExecution.service.ts')).default;
   const codeExecutionService = new CodeExecutionService();
 
-  let testsPasados = 0;
-  const totalTests = testCases.length;
+  let puntosObtenidos = 0;
+  const totalPuntos = testCases.reduce((acc, tc) => acc + (tc.puntos ?? 1), 0);
   const testResults: any[] = [];
 
   for (const testCase of testCases) {
@@ -219,7 +219,7 @@ export async function evaluateProgrammingTestCases(
       const passed = actualOutput === expectedOutput && result.exitCode === 0;
 
       if (passed) {
-        testsPasados++;
+        puntosObtenidos += testCase.puntos ?? 1;
       }
 
       testResults.push({
@@ -243,8 +243,10 @@ export async function evaluateProgrammingTestCases(
     }
   }
 
-  // Calcular puntaje como porcentaje de tests pasados
-  const puntajePorcentaje = (testsPasados / totalTests) * 100;
+  // Calcular puntaje como porcentaje de puntos obtenidos sobre el total
+  // (si ningún test case tiene `puntos` propio, todos valen 1 y esto
+  // equivale al viejo cálculo de tests pasados / total tests).
+  const puntajePorcentaje = totalPuntos > 0 ? (puntosObtenidos / totalPuntos) * 100 : 0;
 
   return { puntaje: puntajePorcentaje, testResults };
 }
