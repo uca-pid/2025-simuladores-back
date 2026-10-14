@@ -137,7 +137,7 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
 
         Object.assign(updateData, result.updateData);
       } else if (attempt.exam.tipo === 'multiple_choice') {
-        const mcData = await prepareMultipleChoiceFinishData(prisma, attemptId, attempt.examId, respuestas);
+        const mcData = await prepareMultipleChoiceFinishData(prisma, attemptId, attempt.examId, userId, respuestas);
         Object.assign(updateData, mcData);
       }
 
@@ -382,7 +382,8 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
               nombre: true,
               email: true
             }
-          }
+          },
+          respuestas: true // Incluir respuestas del nuevo modelo (RespuestaEstudiante)
         }
       });
 
@@ -405,9 +406,17 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
         submissionFiles = files.submissionFiles;
       }
 
+      // Convertir respuestas a formato legacy { preguntaId: valor } - igual que en
+      // /:attemptId/results. ManualGradingModal.js busca por pregunta.id, no por índice.
+      const respuestasLegacy: any = {};
+      attempt.respuestas.forEach((resp) => {
+        respuestasLegacy[resp.preguntaId] = resp.valor;
+      });
+
       // Agregar archivos al resultado
       const result = {
         ...attempt,
+        respuestas: respuestasLegacy,
         manualFiles,
         submissionFiles
       };

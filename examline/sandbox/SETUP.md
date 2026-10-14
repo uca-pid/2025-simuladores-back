@@ -1,9 +1,5 @@
 # Setup del sandbox de ejecución de código (Podman rootless)
 
-Pasos para correr en el Ubuntu Server por SSH, con el **mismo usuario no-root
-que corre el backend** (nunca con sudo para los comandos de podman: rootless
-significa justamente que no necesita privilegios).
-
 ## 1. Instalar Podman y dependencias
 
 ```bash
@@ -103,5 +99,3 @@ hace falta pasar por el backend):
   cada ejecución monta solo su propio archivo temporal, nunca el directorio
   completo.
 
-Documentar esto (con el output real de cada intento bloqueado) es justo el
-tipo de evidencia que pide el objetivo de "modelo de amenazas" del TF.

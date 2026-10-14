@@ -1,5 +1,6 @@
 import { type PrismaClient } from "@prisma/client";
 import CodeExecutionService from "./codeExecution.service.ts";
+import { seededPermutation, applyPermutation, questionOptionsSeed } from "../utils/seededShuffle.ts";
 
 /**
  * Resultado de validar acceso/propiedad sobre un examen. Devuelve null si todo
@@ -308,16 +309,51 @@ export async function getExamById(
     // 🔒 SEGURIDAD: NO enviar respuestas correctas ni datos de test cases
     const sanitizedExam: any = { ...exam };
 
-    // Eliminar respuestas correctas de preguntas (EXCEPTO para matching y fill_in_blank)
-    // Para matching y fill_in_blank, 'correcta' indica la CANTIDAD de elementos, no la respuesta
+    // Mezclar las opciones de cada pregunta ANTES de mandarlas, con una seed
+    // determinística (userId+examId+preguntaId) - ver src/utils/seededShuffle.ts.
+    // Esto reemplaza el shuffle que antes hacía el frontend con Math.random():
+    // ese shuffle pasaba DESPUÉS de que el array ya había viajado por la red en
+    // su orden original, y para 'fill_in_blank'/'matching' ese orden original
+    // ES la respuesta (primeras N = correctas, o respuesta del concepto i en la
+    // posición N+i), así que se podía leer la respuesta correcta directamente
+    // de la respuesta de la API antes de que cualquier shuffle del cliente
+    // corriera. Ahora el array ya llega mezclado, y la corrección (en
+    // examAttempt.service.ts) regenera la misma seed para traducir la posición
+    // mostrada de vuelta al índice real.
     if (sanitizedExam.preguntas) {
       sanitizedExam.preguntas = sanitizedExam.preguntas.map((pregunta: any) => {
-        // Para matching y fill_in_blank, mantener 'correcta' porque indica cantidad de conceptos/respuestas
-        if (pregunta.tipo === 'matching' || pregunta.tipo === 'fill_in_blank') {
-          return pregunta;
+        const seed = questionOptionsSeed(userId, examId, pregunta.id);
+
+        if (pregunta.tipo === 'matching' && Array.isArray(pregunta.opciones)) {
+          // 'correcta' indica cuántos conceptos hay; los conceptos (primeros N)
+          // quedan en su orden original (no son secretos), solo se mezcla el
+          // segmento de respuestas.
+          const numConceptos = pregunta.correcta || 0;
+          const conceptos = pregunta.opciones.slice(0, numConceptos);
+          const respuestasSegment = pregunta.opciones.slice(numConceptos);
+          const permSeg = seededPermutation(respuestasSegment.length, seed);
+          const respuestasMezcladas = applyPermutation(respuestasSegment, permSeg);
+          return { ...pregunta, opciones: [...conceptos, ...respuestasMezcladas] };
         }
-        // Para otros tipos (multiple_choice, true_false), eliminar 'correcta'
+
+        if (pregunta.tipo === 'fill_in_blank' && Array.isArray(pregunta.opciones)) {
+          // 'correcta' indica cuántas respuestas correctas hay; una vez que el
+          // array completo está mezclado, ese número ya no revela cuáles son.
+          const perm = seededPermutation(pregunta.opciones.length, seed);
+          const opcionesMezcladas = applyPermutation(pregunta.opciones, perm);
+          return { ...pregunta, opciones: opcionesMezcladas };
+        }
+
+        // multiple_choice / true_false: sacar 'correcta' (ya se hacía) y
+        // además mezclar 'opciones' para que el orden sea estable por
+        // estudiante (antes lo mezclaba el cliente con Math.random(), lo que
+        // rompía las respuestas ya guardadas si la página se refrescaba a
+        // mitad de examen).
         const { correcta, ...preguntaSinRespuesta } = pregunta;
+        if (Array.isArray(preguntaSinRespuesta.opciones)) {
+          const perm = seededPermutation(preguntaSinRespuesta.opciones.length, seed);
+          preguntaSinRespuesta.opciones = applyPermutation(preguntaSinRespuesta.opciones, perm);
+        }
         return preguntaSinRespuesta;
       });
     }

@@ -1,4 +1,5 @@
 import { type PrismaClient } from "@prisma/client";
+import { seededPermutation, questionOptionsSeed } from "../utils/seededShuffle.ts";
 
 /**
  * Resultado de validar disponibilidad de una inscripción/ventana para iniciar un intento.
@@ -274,18 +275,92 @@ export async function prepareProgrammingFinishData(
  * Prepara los datos de actualización necesarios para finalizar un intento de un examen
  * de tipo 'multiple_choice': guarda las respuestas del estudiante en RespuestaEstudiante
  * y calcula el puntaje automático comparando contra las respuestas correctas.
+ *
+ * IMPORTANTE sobre randomización: las opciones que vio el estudiante (en
+ * getExamById, exam.service.ts) llegaron mezcladas con una seed determinística
+ * derivada de (userId, examId, preguntaId). Lo que manda el frontend en
+ * `respuestas` son POSICIONES MOSTRADAS (posiciones dentro de ese array ya
+ * mezclado), no índices reales. Acá se regenera esa MISMA seed (no se guarda
+ * el permutado en ningún lado) para traducir cada posición mostrada al índice
+ * real dentro de `pregunta.opciones` tal como está en la base, ANTES de
+ * guardar nada: lo que se persiste en RespuestaEstudiante.valor son los
+ * índices reales (igual que antes de este cambio), para que las vistas de
+ * resultados (ExamResults.js, professor-view), que usan `pregunta.opciones`
+ * sin mezclar, sigan interpretando `valor` correctamente.
  */
 export async function prepareMultipleChoiceFinishData(
   prisma: PrismaClient,
   attemptId: number,
   examId: number,
+  userId: number,
   respuestas: any
 ): Promise<any> {
   const updateData: any = {};
 
-  // Guardar respuestas en la nueva tabla RespuestaEstudiante
-  if (respuestas && typeof respuestas === 'object') {
-    const respuestasArray = Object.entries(respuestas).map(([preguntaId, valor]) => ({
+  // Obtener el examen primero: hace falta para traducir las posiciones
+  // mostradas a índices reales antes de guardar nada.
+  const exam = await prisma.exam.findUnique({
+    where: { id: examId },
+    include: { preguntas: true }
+  });
+
+  // Traduce, para una pregunta puntual, la respuesta del estudiante (en
+  // términos de "posición mostrada") al mismo formato pero en índices reales
+  // dentro de pregunta.opciones - regenerando el permutado con la seed
+  // determinística usada al mandar la pregunta.
+  const traducirRespuesta = (pregunta: any, respuestaMostrada: any): any => {
+    const seed = questionOptionsSeed(userId, examId, pregunta.id);
+
+    if (!Array.isArray(pregunta.opciones)) {
+      return respuestaMostrada;
+    }
+
+    if (pregunta.tipo === 'fill_in_blank') {
+      if (!Array.isArray(respuestaMostrada)) return respuestaMostrada;
+      const perm = seededPermutation(pregunta.opciones.length, seed);
+      return respuestaMostrada.map((posicionMostrada: number) =>
+        (Number.isInteger(posicionMostrada) && posicionMostrada >= 0 && posicionMostrada < perm.length)
+          ? perm[posicionMostrada]
+          : -1
+      );
+    }
+
+    if (pregunta.tipo === 'matching') {
+      if (!Array.isArray(respuestaMostrada)) return respuestaMostrada;
+      const numConceptos = pregunta.correcta || 0;
+      const segLen = pregunta.opciones.length - numConceptos;
+      const permSeg = seededPermutation(segLen, seed);
+      return respuestaMostrada.map((posicionMostrada: number) =>
+        (Number.isInteger(posicionMostrada) && posicionMostrada >= 0 && posicionMostrada < permSeg.length)
+          ? numConceptos + permSeg[posicionMostrada]
+          : -1
+      );
+    }
+
+    // multiple_choice / true_false
+    if (typeof respuestaMostrada !== 'number') return respuestaMostrada;
+    const perm = seededPermutation(pregunta.opciones.length, seed);
+    return (respuestaMostrada >= 0 && respuestaMostrada < perm.length)
+      ? perm[respuestaMostrada]
+      : -1;
+  };
+
+  // Construir el mapa de respuestas ya traducidas a índices reales (preguntaId -> valor)
+  const respuestasTraducidas: Record<number, any> = {};
+  if (respuestas && typeof respuestas === 'object' && exam?.preguntas) {
+    const preguntasPorId = new Map(exam.preguntas.map((p) => [p.id, p]));
+    for (const [preguntaIdStr, respuestaMostrada] of Object.entries(respuestas)) {
+      const preguntaId = parseInt(preguntaIdStr);
+      const pregunta = preguntasPorId.get(preguntaId);
+      respuestasTraducidas[preguntaId] = pregunta
+        ? traducirRespuesta(pregunta, respuestaMostrada)
+        : respuestaMostrada;
+    }
+  }
+
+  // Guardar respuestas (ya en índices reales) en la tabla RespuestaEstudiante
+  if (Object.keys(respuestasTraducidas).length > 0) {
+    const respuestasArray = Object.entries(respuestasTraducidas).map(([preguntaId, valor]) => ({
       attemptId,
       preguntaId: parseInt(preguntaId),
       valor
@@ -299,19 +374,15 @@ export async function prepareMultipleChoiceFinishData(
   }
 
   // Calcular puntaje automáticamente
-  const exam = await prisma.exam.findUnique({
-    where: { id: examId },
-    include: { preguntas: true }
-  });
-
   if (exam && exam.preguntas && exam.preguntas.length > 0) {
     let correctas = 0;
     const totalPreguntas = exam.preguntas.length;
 
     // IMPORTANTE: Las respuestas ahora vienen con preguntaId como key (no índice)
-    // para soportar orden aleatorio de preguntas
+    // para soportar orden aleatorio de preguntas. Acá ya se usan los índices
+    // reales traducidos arriba.
     exam.preguntas.forEach((pregunta) => {
-      const respuestaEstudiante = respuestas?.[pregunta.id];
+      const respuestaEstudiante = respuestasTraducidas?.[pregunta.id];
 
       if (respuestaEstudiante === undefined || respuestaEstudiante === null) {
         // No respondió
@@ -320,7 +391,8 @@ export async function prepareMultipleChoiceFinishData(
 
       // Evaluar según el tipo de pregunta
       if (pregunta.tipo === 'fill_in_blank') {
-        // Para fill_in_blank, la respuesta debe ser un array con los ÍNDICES de las respuestas correctas en orden
+        // Para fill_in_blank, la respuesta debe ser un array con los ÍNDICES
+        // REALES de las respuestas correctas en orden
         if (Array.isArray(respuestaEstudiante) && Array.isArray(pregunta.opciones)) {
           // pregunta.correcta indica cuántas respuestas correctas hay
           // Las primeras N opciones son las correctas (en orden)
