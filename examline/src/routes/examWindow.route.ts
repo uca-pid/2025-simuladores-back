@@ -6,6 +6,7 @@ import {
   parseFiltroFecha,
   updateWindowStatuses,
   startMillisecondSystem,
+  generateUniqueExamWindowCode,
 } from "../services/examWindow.service.ts";
 
 const ExamWindowRoute = (prisma: PrismaClient) => {
@@ -71,8 +72,11 @@ const ExamWindowRoute = (prisma: PrismaClient) => {
         }
 
         // Preparar datos para la creación
+        const codigo = await generateUniqueExamWindowCode(prisma);
+
         const windowData: any = {
           examId: examIdNumber,
+          codigo,
           nombre: nombre || `Ventana ${Date.now()}`,
           modalidad,
           cupoMaximo: cupoMaximoNumber,
@@ -143,6 +147,50 @@ const ExamWindowRoute = (prisma: PrismaClient) => {
       res.status(500).json({ error: 'Error interno del servidor' });
     }
   });
+
+// Buscar una ventana por código de acceso (para que el alumno se inscriba sin ver el listado completo)
+router.get('/por-codigo/:codigo', authenticateToken, requireRole(['student']), async (req, res) => {
+  const codigo = req.params.codigo.trim().toUpperCase();
+
+  try {
+    await updateWindowStatuses(prisma, undefined, false, true);
+
+    const examWindow = await prisma.examWindow.findUnique({
+      where: { codigo },
+      include: {
+        exam: {
+          select: {
+            id: true,
+            titulo: true,
+            eliminado: true,
+            profesor: { select: { nombre: true } }
+          }
+        },
+        inscripciones: {
+          where: { cancelledAt: null },
+          select: { id: true, userId: true }
+        }
+      }
+    });
+
+    if (!examWindow || examWindow.exam.eliminado) {
+      return res.status(404).json({ error: 'Código inválido' });
+    }
+
+    const inscripcionesActivas = examWindow.inscripciones.length;
+    const cupoDisponible = examWindow.cupoMaximo - inscripcionesActivas;
+    const yaInscrito = examWindow.inscripciones.some(ins => ins.userId === req.user!.userId);
+
+    res.json({
+      ...examWindow,
+      cupoDisponible,
+      yaInscrito
+    });
+  } catch (error: any) {
+    console.error('Error buscando ventana por código:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
 
 // Obtener ventanas disponibles para estudiantes
 router.get('/disponibles', authenticateToken, requireRole(['student']), async (req, res) => {

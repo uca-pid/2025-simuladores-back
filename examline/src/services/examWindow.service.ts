@@ -18,6 +18,32 @@ export function parseLocalDate(dateString: string): Date {
   return new Date(year, month - 1, day, hours, minutes);
 }
 
+const CODIGO_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // sin caracteres ambiguos (0/O, 1/I, etc.)
+
+function randomCodigo(length = 6): string {
+  let codigo = "";
+  for (let i = 0; i < length; i++) {
+    codigo += CODIGO_CHARS[Math.floor(Math.random() * CODIGO_CHARS.length)];
+  }
+  return codigo;
+}
+
+/**
+ * Genera un código de acceso único para una ExamWindow, usado por los
+ * estudiantes para auto-inscribirse sin ver el listado de todas las ventanas.
+ */
+export async function generateUniqueExamWindowCode(prisma: PrismaClient): Promise<string> {
+  let codigo = randomCodigo();
+  let existing = await prisma.examWindow.findUnique({ where: { codigo } });
+
+  while (existing) {
+    codigo = randomCodigo();
+    existing = await prisma.examWindow.findUnique({ where: { codigo } });
+  }
+
+  return codigo;
+}
+
 // Convierte string de filtro a Date en hora local
 export function parseFiltroFecha(dateString: string): Date {
   if (!dateString) throw new Error("No se recibió fecha válida");

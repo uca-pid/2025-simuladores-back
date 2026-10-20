@@ -189,18 +189,22 @@ const InscriptionRoute = (prisma: PrismaClient) => {
     }
   });
 
-  // Cancelar inscripción
-  router.delete('/:id', authenticateToken, requireRole(['student']), async (req, res) => {
+  // Cancelar inscripción (el propio alumno, o el profesor dueño del examen dando de baja a un inscripto)
+  router.delete('/:id', authenticateToken, requireRole(['student', 'professor']), async (req, res) => {
     const inscriptionId = parseInt(req.params.id);
     const userId = req.user!.userId;
+    const isProfessor = req.user!.rol === 'professor';
 
     try {
-      // Verificar que la inscripción existe y pertenece al usuario
+      // Verificar que la inscripción existe: el alumno solo puede cancelar la suya,
+      // el profesor puede dar de baja cualquier inscripción de una ventana de su examen
       const inscription = await prisma.inscription.findFirst({
         where: {
           id: inscriptionId,
-          userId: userId,
-          cancelledAt: null
+          cancelledAt: null,
+          ...(isProfessor
+            ? { examWindow: { exam: { profesorId: userId } } }
+            : { userId })
         },
         include: {
           examWindow: {
@@ -215,8 +219,8 @@ const InscriptionRoute = (prisma: PrismaClient) => {
         return res.status(404).json({ error: 'Inscripción no encontrada' });
       }
 
-      // Verificar que la ventana no haya comenzado (solo para ventanas con tiempo)
-      if (!inscription.examWindow.sinTiempo && inscription.examWindow.fechaInicio && 
+      // Verificar que la ventana no haya comenzado (solo para ventanas con tiempo, y solo aplica al propio alumno)
+      if (!isProfessor && !inscription.examWindow.sinTiempo && inscription.examWindow.fechaInicio &&
           new Date() >= new Date(inscription.examWindow.fechaInicio)) {
         return res.status(400).json({ error: 'No se puede cancelar la inscripción una vez que la ventana comenzó' });
       }

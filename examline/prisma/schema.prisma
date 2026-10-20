@@ -108,6 +108,7 @@ model ExamHistory {
 model ExamWindow {
   id            Int           @id @default(autoincrement())
   examId        Int
+  codigo        String        @unique // código de acceso que el profesor comparte con los alumnos para inscribirse
   nombre        String        // nombre descriptivo de la ventana
   fechaInicio   DateTime?
   duracion      Int?
