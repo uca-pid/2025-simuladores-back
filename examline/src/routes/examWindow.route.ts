@@ -134,6 +134,13 @@ const ExamWindowRoute = (prisma: PrismaClient) => {
                 select: { id: true, nombre: true, email: true }
               }
             }
+          },
+          intentos: {
+            where: {
+              finishedAt: { not: null },
+              calificacionManual: null
+            },
+            select: { id: true }
           }
         },
         orderBy: {
@@ -141,7 +148,12 @@ const ExamWindowRoute = (prisma: PrismaClient) => {
         }
       });
 
-      res.json(examWindows);
+      const examWindowsConCorreccionPendiente = examWindows.map(({ intentos, ...window }) => ({
+        ...window,
+        pendientesCorreccionCount: intentos.length
+      }));
+
+      res.json(examWindowsConCorreccionPendiente);
     } catch (error: any) {
       console.error('Error obteniendo ventanas de examen:', error);
       res.status(500).json({ error: 'Error interno del servidor' });
