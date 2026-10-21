@@ -123,7 +123,7 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
       // Verificar que el intento pertenece al usuario
       const attempt = await prisma.examAttempt.findUnique({
         where: { id: attemptId },
-        include: { exam: true }
+        include: { exam: { include: { partes: true } } }
       });
 
       if (!attempt) {
@@ -138,8 +138,8 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
         return res.status(400).json({ error: "El intento ya fue finalizado" });
       }
 
-      // Verificar que es un examen de programación
-      if (attempt.exam.tipo !== 'programming') {
+      // Verificar que el examen tiene al menos una parte de programación
+      if (!attempt.exam.partes.some(p => p.tipo === 'programming')) {
         return res.status(400).json({ error: "Esta ruta es solo para exámenes de programación" });
       }
 

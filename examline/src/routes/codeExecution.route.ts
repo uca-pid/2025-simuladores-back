@@ -43,12 +43,6 @@ const CodeExecutionRoute = (prisma: PrismaClient) => {
           return res.status(404).json({ error: 'Examen no encontrado' });
         }
 
-        if (exam.tipo !== 'programming') {
-          return res.status(400).json({
-            error: 'Este examen no es de tipo programación'
-          });
-        }
-
         // 🔒 Validación de seguridad: verificar que el estudiante esté inscrito
         if (userRole === 'student') {
           const inscription = await prisma.inscription.findFirst({
