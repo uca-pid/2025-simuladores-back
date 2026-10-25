@@ -140,7 +140,8 @@ const ExamWindowRoute = (prisma: PrismaClient) => {
               finishedAt: { not: null },
               calificacionManual: null
             },
-            select: { id: true }
+            select: { id: true },
+            orderBy: { finishedAt: 'asc' }
           }
         },
         orderBy: {
@@ -150,7 +151,8 @@ const ExamWindowRoute = (prisma: PrismaClient) => {
 
       const examWindowsConCorreccionPendiente = examWindows.map(({ intentos, ...window }) => ({
         ...window,
-        pendientesCorreccionCount: intentos.length
+        pendientesCorreccionCount: intentos.length,
+        primerIntentoPendienteId: intentos[0]?.id ?? null
       }));
 
       res.json(examWindowsConCorreccionPendiente);
