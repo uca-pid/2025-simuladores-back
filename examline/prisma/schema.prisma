@@ -263,6 +263,7 @@ model QuestionBank {
   correcta  Int?     // Valor según tipo (ver Pregunta); null para short_answer/numeric/essay/file_upload/multiple_response
   correctas Json?    // Solo multiple_response: array de índices de las opciones correctas
   tags      Json     @default("[]")
+  imagenUrl String?  // Imagen opcional de la pregunta (solo multiple_choice)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   profesor  User     @relation(fields: [profesorId], references: [id])

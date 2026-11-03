@@ -37,7 +37,7 @@ router.post("/", authenticateToken, async (req, res) => {
       return res.status(403).json({ error: "Solo los profesores pueden crear preguntas en el banco" });
     }
 
-    const { tipo, dificultad, titulo, texto, opciones, correcta, correctas, tags } = req.body;
+    const { tipo, dificultad, titulo, texto, opciones, correcta, correctas, tags, imagenUrl } = req.body;
     // essay/file_upload no tienen respuesta correcta predefinida (corrección manual)
     const requiereCorrecta = !["essay", "file_upload", "multiple_response"].includes(tipo || "multiple_choice");
 
@@ -55,7 +55,8 @@ router.post("/", authenticateToken, async (req, res) => {
         opciones,
         correcta: requiereCorrecta ? correcta : null,
         correctas: tipo === "multiple_response" ? (correctas ?? null) : null,
-        tags: tags || []
+        tags: tags || [],
+        imagenUrl: imagenUrl || null
       }
     });
 
@@ -71,7 +72,7 @@ router.put("/:id", authenticateToken, async (req, res) => {
   try {
     const userId = (req as any).user.userId;
     const questionId = parseInt(req.params.id);
-    const { tipo, dificultad, titulo, texto, opciones, correcta, correctas, tags } = req.body;
+    const { tipo, dificultad, titulo, texto, opciones, correcta, correctas, tags, imagenUrl } = req.body;
 
     const question = await prisma.questionBank.findUnique({
       where: { id: questionId }
@@ -98,7 +99,8 @@ router.put("/:id", authenticateToken, async (req, res) => {
         opciones,
         correcta: requiereCorrecta ? correcta : null,
         correctas: tipoFinal === "multiple_response" ? (correctas ?? question.correctas) : null,
-        tags: tags !== undefined ? tags : question.tags
+        tags: tags !== undefined ? tags : question.tags,
+        imagenUrl: imagenUrl !== undefined ? (imagenUrl || null) : question.imagenUrl
       }
     });
 
