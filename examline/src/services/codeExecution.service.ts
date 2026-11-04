@@ -692,8 +692,10 @@ rl.on('close', () => {
           input: testCase.input
         });
 
-        const actualOutput = result.output.trim();
-        const expectedOutput = testCase.expectedOutput.trim();
+        // Se normalizan los saltos de línea: en Windows Python imprime \r\n y el
+        // output esperado (escrito en un textarea) usa \n.
+        const actualOutput = result.output.replace(/\r\n/g, '\n').trim();
+        const expectedOutput = testCase.expectedOutput.replace(/\r\n/g, '\n').trim();
         const passed = actualOutput === expectedOutput && result.exitCode === 0 && !result.error;
 
         if (passed) {

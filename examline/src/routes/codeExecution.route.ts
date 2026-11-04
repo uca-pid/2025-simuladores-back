@@ -189,7 +189,7 @@ const CodeExecutionRoute = (prisma: PrismaClient) => {
               }
             );
 
-            const passed = result.output?.trim() === testCase.expectedOutput?.trim();
+            const passed = result.output?.replace(/\r\n/g, '\n').trim() === testCase.expectedOutput?.replace(/\r\n/g, '\n').trim();
             if (passed) passedTests++;
 
             testResults.push({

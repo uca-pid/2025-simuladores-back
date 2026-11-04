@@ -329,7 +329,7 @@ const ExamRoute = (prisma: PrismaClient) => {
   // Ejecuta tests contra código durante la creación del examen (sin examen guardado)
   router.post("/test-solution-preview", authenticateToken, requireRole(['professor']), async (req, res) => {
     try {
-      const { code, language, testCases } = req.body;
+      const { code, language, testCases, datasetFiles } = req.body;
 
       if (!code) {
         return res.status(400).json({ error: "Debe proporcionar código para ejecutar" });
@@ -343,7 +343,7 @@ const ExamRoute = (prisma: PrismaClient) => {
         return res.status(400).json({ error: "Debe proporcionar test cases" });
       }
 
-      const testResults = await testSolutionPreview(codeExecutionService, code, language, testCases);
+      const testResults = await testSolutionPreview(codeExecutionService, code, language, testCases, datasetFiles);
 
       return res.json({
         success: true,

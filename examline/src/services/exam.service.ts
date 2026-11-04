@@ -884,13 +884,17 @@ export async function testSolutionPreview(
   codeExecutionService: CodeExecutionService,
   code: string,
   language: string,
-  testCases: any[]
+  testCases: any[],
+  datasetFiles?: unknown
 ) {
+  // Los datasets ya fueron subidos (con upload-dataset) aunque el examen todavía
+  // no esté guardado: se cargan por url para dejarlos junto al código.
+  const datasets = await loadExamDatasets({ datasetFiles });
   const testResults = await codeExecutionService.runTests(
     code,
     language as 'python' | 'javascript' | 'c',
     testCases,
-    { timeout: 10000 }
+    { timeout: 10000, datasets }
   );
 
   return testResults;

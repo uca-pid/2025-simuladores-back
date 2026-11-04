@@ -1,4 +1,5 @@
 import { type PrismaClient } from "@prisma/client";
+import { loadExamDatasets } from "./exam.service.ts";
 
 /**
  * Resultado de validar disponibilidad de una inscripción/ventana para iniciar un intento.
@@ -193,7 +194,8 @@ export async function findOrCreateAttempt(
 export async function evaluateProgrammingTestCases(
   codigo: string,
   lenguajeProgramacion: string,
-  testCases: any[]
+  testCases: any[],
+  datasets?: Array<{ name: string; content: string }>
 ): Promise<{ puntaje: number; testResults: any[] }> {
   const CodeExecutionService = (await import('./codeExecution.service.ts')).default;
   const codeExecutionService = new CodeExecutionService();
@@ -209,13 +211,14 @@ export async function evaluateProgrammingTestCases(
         lenguajeProgramacion as 'python' | 'javascript' | 'c',
         {
           input: testCase.input || '',
-          timeout: 10000
+          timeout: 10000,
+          datasets
         }
       );
 
       // Comparar output (eliminar espacios en blanco extra)
-      const expectedOutput = (testCase.expectedOutput || '').trim();
-      const actualOutput = (result.output || '').trim();
+      const expectedOutput = (testCase.expectedOutput || '').replace(/\r\n/g, '\n').trim();
+      const actualOutput = (result.output || '').replace(/\r\n/g, '\n').trim();
       const passed = actualOutput === expectedOutput && result.exitCode === 0;
 
       if (passed) {
@@ -311,10 +314,14 @@ export async function prepareProgrammingFinishData(
 
   // Evaluación automática con test cases
   if (exam.testCases && Array.isArray(exam.testCases) && exam.testCases.length > 0) {
+    // Los datasets de la parte (CSV/TXT) se dejan junto al código del alumno
+    // para que open("archivo.csv") funcione igual que durante el examen.
+    const datasets = await loadExamDatasets(exam);
     const { puntaje, testResults } = await evaluateProgrammingTestCases(
       codigoParaEvaluar,
       exam.lenguajeProgramacion as string,
-      exam.testCases as any[]
+      exam.testCases as any[],
+      datasets
     );
 
     updateData.puntaje = puntaje;
