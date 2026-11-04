@@ -149,7 +149,7 @@ const CodeExecutionRoute = (prisma: PrismaClient) => {
    */
   router.post('/execute', authenticateToken, requireRole(['professor']), async (req, res) => {
     try {
-      const { code, language, filename, testCases, customInput } = req.body;
+      const { code, language, filename, testCases, customInput, examId } = req.body;
 
       // Validaciones
       if (!code || !language) {
@@ -164,6 +164,17 @@ const CodeExecutionRoute = (prisma: PrismaClient) => {
         });
       }
 
+      // Datasets del examen (viven en cada ExamPart). Solo se cargan si el examen
+      // es del profesor que ejecuta, para no exponer archivos de otros profesores.
+      let datasets: Awaited<ReturnType<typeof loadExamDatasets>> | undefined;
+      if (examId) {
+        const exam = await prisma.exam.findUnique({ where: { id: parseInt(examId) } });
+        if (exam && exam.profesorId === req.user!.userId) {
+          const parts = await prisma.examPart.findMany({ where: { examId: exam.id } });
+          datasets = (await Promise.all(parts.map(p => loadExamDatasets(p)))).flat();
+        }
+      }
+
       // Si hay input personalizado, ejecutar con ese input
       if (customInput !== undefined && customInput !== null) {
         const result = await codeExecutionService.executeCode(
@@ -173,6 +184,7 @@ const CodeExecutionRoute = (prisma: PrismaClient) => {
             timeout: 10000,
             maxMemory: '128m',
             input: customInput,
+            datasets,
           }
         );
 
@@ -199,6 +211,7 @@ const CodeExecutionRoute = (prisma: PrismaClient) => {
                 timeout: 10000,
                 maxMemory: '128m',
                 input: testCase.input || '',
+                datasets,
               }
             );
 
@@ -242,6 +255,7 @@ const CodeExecutionRoute = (prisma: PrismaClient) => {
           timeout: 10000,
           maxMemory: '128m',
           input: '',
+          datasets,
         }
       );
 
