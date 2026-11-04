@@ -15,7 +15,7 @@ const CodeExecutionRoute = (prisma: PrismaClient) => {
    */
   router.post('/run', authenticateToken, async (req, res) => {
     try {
-      const { code, language, examId, input } = req.body;
+      const { code, language, examId, partId, input } = req.body;
       const userId = req.user!.userId;
       const userRole = req.user!.rol;
 
@@ -61,7 +61,20 @@ const CodeExecutionRoute = (prisma: PrismaClient) => {
           }
         }
 
-        datasets = await loadExamDatasets(exam);
+        // Los datasets viven en cada ExamPart (no en Exam). Si el cliente indica la
+        // parte se usan los de esa parte; si no, los de todas las partes del examen.
+        let parts = await prisma.examPart.findMany({
+          where: {
+            examId: parseInt(examId),
+            ...(partId ? { id: parseInt(partId) } : {})
+          }
+        });
+        if (parts.length === 0 && partId) {
+          // partId inválido o de otro examen: usar las partes del examen
+          parts = await prisma.examPart.findMany({ where: { examId: parseInt(examId) } });
+        }
+        const loaded = await Promise.all(parts.map(p => loadExamDatasets(p)));
+        datasets = loaded.flat();
       }
 
       // Ejecutar código
