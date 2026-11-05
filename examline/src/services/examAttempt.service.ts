@@ -273,7 +273,7 @@ export async function prepareProgrammingFinishData(
   attempt: { examId: number; userId: number; partId: number }
 ): Promise<ProgrammingFinishResult> {
   // 🔒 Obtener el archivo principal guardado manualmente
-  // Convención: main.py (Python) o main.js (JavaScript)
+  // Convención: main.py (Python), main.js (JavaScript) o main.c (C)
   const exam = await prisma.examPart.findUnique({
     where: { id: attempt.partId }
   });
@@ -283,7 +283,8 @@ export async function prepareProgrammingFinishData(
   }
 
   // Determinar el nombre del archivo principal según el lenguaje
-  const mainFileName = exam.lenguajeProgramacion === 'python' ? 'main.py' : 'main.js';
+  const MAIN_FILE_NAMES: Record<string, string> = { python: 'main.py', javascript: 'main.js', c: 'main.c' };
+  const mainFileName = MAIN_FILE_NAMES[exam.lenguajeProgramacion as string] || 'main.js';
 
   // Buscar el archivo principal guardado manualmente (versión "manual")
   const mainFile = await prisma.examFile.findFirst({
