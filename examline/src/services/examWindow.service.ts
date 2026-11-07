@@ -44,6 +44,30 @@ export async function generateUniqueExamWindowCode(prisma: PrismaClient): Promis
   return codigo;
 }
 
+/**
+ * Indica si una ventana permite rendir en este momento. Las ventanas con tiempo
+ * dependen de estado+horario; las sin tiempo, de estar activas y no cerradas por
+ * el profesor (al cerrarlas pasan a 'finalizada').
+ */
+export function isWindowOpenForAttempts(window: {
+  activa: boolean;
+  sinTiempo: boolean;
+  estado: string;
+  fechaInicio: Date | null;
+  duracion: number | null;
+}): boolean {
+  if (!window.activa || window.estado === 'finalizada') {
+    return false;
+  }
+  if (window.sinTiempo) {
+    return true;
+  }
+  const now = new Date();
+  const startDate = new Date(window.fechaInicio!);
+  const endDate = new Date(startDate.getTime() + (window.duracion! * 60 * 1000));
+  return window.estado === 'en_curso' && now >= startDate && now <= endDate;
+}
+
 // Convierte string de filtro a Date en hora local
 export function parseFiltroFecha(dateString: string): Date {
   if (!dateString) throw new Error("No se recibió fecha válida");

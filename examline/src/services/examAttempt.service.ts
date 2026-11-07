@@ -1,5 +1,6 @@
-import { type PrismaClient } from "@prisma/client";
+import { Prisma, type PrismaClient } from "@prisma/client";
 import { loadExamDatasets } from "./exam.service.ts";
+import { isWindowOpenForAttempts } from "./examWindow.service.ts";
 
 /**
  * Resultado de validar disponibilidad de una inscripción/ventana para iniciar un intento.
@@ -36,21 +37,9 @@ export async function validateAttemptStart(
     return { status: 403, error: "Esta ventana de examen ha sido desactivada por el profesor" };
   }
 
-  // Verificar disponibilidad del examen
-  if (inscription.examWindow.sinTiempo) {
-    // Para ventanas sin tiempo, solo verificar que esté activa
-    if (!inscription.examWindow.activa) {
-      return { status: 403, error: "El examen no está disponible" };
-    }
-  } else {
-    // Para ventanas con tiempo, verificar tiempo y estado
-    const now = new Date();
-    const startDate = new Date(inscription.examWindow.fechaInicio!);
-    const endDate = new Date(startDate.getTime() + (inscription.examWindow.duracion! * 60 * 1000));
-
-    if (inscription.examWindow.estado !== 'en_curso' || now < startDate || now > endDate) {
-      return { status: 403, error: "El examen no está disponible" };
-    }
+  // Verificar disponibilidad del examen (horario, o cierre manual del profesor)
+  if (!isWindowOpenForAttempts(inscription.examWindow)) {
+    return { status: 403, error: "El examen no está disponible" };
   }
 
   return null;
@@ -547,13 +536,8 @@ async function loadAttemptForPartTransition(
     return { error: { status: 403, error: "No autorizado" } as PartAdvanceError };
   }
 
-  if (attempt.examWindow && !attempt.examWindow.sinTiempo) {
-    const now = new Date();
-    const startDate = new Date(attempt.examWindow.fechaInicio!);
-    const endDate = new Date(startDate.getTime() + (attempt.examWindow.duracion! * 60 * 1000));
-    if (attempt.examWindow.estado !== 'en_curso' || now < startDate || now > endDate) {
-      return { error: { status: 403, error: "El examen no está disponible en este momento" } as PartAdvanceError };
-    }
+  if (attempt.examWindow && !isWindowOpenForAttempts(attempt.examWindow)) {
+    return { error: { status: 403, error: "El examen no está disponible en este momento" } as PartAdvanceError };
   }
 
   return { attempt };
@@ -636,6 +620,7 @@ export async function advancePart(
       where: { id: attemptId },
       data: {
         partStatus: 'esperando_continuar',
+        respuestasBorrador: Prisma.DbNull,
         ...(partUpdateData.codigoProgramacion ? { codigoProgramacion: partUpdateData.codigoProgramacion } : {}),
         ...(partScore !== undefined ? { puntaje: partScore } : {})
       }
@@ -656,6 +641,7 @@ export async function advancePart(
       estado: 'finalizado',
       partStatus: 'finalizada',
       finishedAt: new Date(),
+      respuestasBorrador: Prisma.DbNull,
       ...(partUpdateData.codigoProgramacion ? { codigoProgramacion: partUpdateData.codigoProgramacion } : {}),
       ...(partUpdateData.testResults ? { testResults: partUpdateData.testResults } : {}),
       ...(finalScore !== undefined ? { puntaje: finalScore } : {})
@@ -697,6 +683,173 @@ export async function continueToNextPart(
   });
 
   return { attempt: updated };
+}
+
+/**
+ * Autoguarda las respuestas de la parte en curso (ya traducidas a índices
+ * originales por el cliente), para poder corregirlas si el profesor cierra el
+ * examen antes de que el alumno entregue.
+ */
+export async function saveDraftAnswers(
+  prisma: PrismaClient,
+  attemptId: number,
+  userId: number,
+  respuestas: any
+) {
+  const attempt = await prisma.examAttempt.findUnique({ where: { id: attemptId } });
+
+  if (!attempt) {
+    return { error: { status: 404, error: "Intento no encontrado" } as PartAdvanceError };
+  }
+  if (attempt.userId !== userId) {
+    return { error: { status: 403, error: "No autorizado" } as PartAdvanceError };
+  }
+  if (attempt.estado !== 'en_progreso' || attempt.partStatus !== 'en_curso') {
+    return { error: { status: 400, error: "El intento ya fue finalizado" } as PartAdvanceError };
+  }
+  if (!respuestas || typeof respuestas !== 'object' || Array.isArray(respuestas)) {
+    return { error: { status: 400, error: "Formato de respuestas inválido" } as PartAdvanceError };
+  }
+
+  await prisma.examAttempt.update({
+    where: { id: attemptId },
+    data: { respuestasBorrador: respuestas }
+  });
+
+  return { ok: true };
+}
+
+/**
+ * Estado liviano del intento para que el alumno consulte periódicamente
+ * si el profesor cerró el examen.
+ */
+export async function getAttemptStatus(
+  prisma: PrismaClient,
+  attemptId: number,
+  userId: number
+) {
+  const attempt = await prisma.examAttempt.findUnique({
+    where: { id: attemptId },
+    include: { examWindow: true }
+  });
+
+  if (!attempt) {
+    return { error: { status: 404, error: "Intento no encontrado" } as PartAdvanceError };
+  }
+  if (attempt.userId !== userId) {
+    return { error: { status: 403, error: "No autorizado" } as PartAdvanceError };
+  }
+
+  return {
+    status: {
+      estado: attempt.estado,
+      partStatus: attempt.partStatus,
+      currentPartIndex: attempt.currentPartIndex,
+      examenCerrado: attempt.examWindow ? !isWindowOpenForAttempts(attempt.examWindow) : false
+    }
+  };
+}
+
+/**
+ * Finaliza un intento en curso cuando el profesor cierra el examen. Corrige la
+ * parte en curso con lo autoguardado (multiple choice) o el último archivo
+ * guardado (programación); las partes que el alumno no llegó a abrir cuentan 0.
+ */
+async function forceFinishAttempt(prisma: PrismaClient, attemptId: number) {
+  const attempt = await prisma.examAttempt.findUnique({
+    where: { id: attemptId },
+    include: { exam: { include: { partes: { orderBy: { orden: 'asc' } } } } }
+  });
+
+  if (!attempt || attempt.estado !== 'en_progreso') {
+    return;
+  }
+
+  const partes = attempt.exam.partes;
+  const parte = partes[attempt.currentPartIndex];
+  const scores: number[] = [];
+  const updateData: any = {};
+
+  // Puntaje de la parte anterior ya cerrada (mismo criterio que advancePart).
+  if (attempt.currentPartIndex > 0 && typeof attempt.puntaje === 'number') {
+    scores.push(attempt.puntaje);
+  }
+
+  if (parte && attempt.partStatus === 'en_curso') {
+    if (parte.tipo === 'multiple_choice') {
+      const borrador = (attempt.respuestasBorrador && typeof attempt.respuestasBorrador === 'object')
+        ? attempt.respuestasBorrador as Record<string, any>
+        : {};
+      const mcData = await prepareMultipleChoiceFinishData(prisma, attemptId, parte.id, borrador);
+      if (typeof mcData.puntaje === 'number') scores.push(mcData.puntaje);
+    } else if (parte.tipo === 'programming') {
+      const result = await prepareProgrammingFinishData(prisma, {
+        examId: attempt.examId,
+        userId: attempt.userId,
+        partId: parte.id
+      });
+      if (result.updateData) {
+        Object.assign(updateData, {
+          codigoProgramacion: result.updateData.codigoProgramacion,
+          ...(result.updateData.testResults ? { testResults: result.updateData.testResults } : {})
+        });
+        if (typeof result.updateData.puntaje === 'number') scores.push(result.updateData.puntaje);
+      } else {
+        // Sin archivo principal guardado: la parte cuenta 0.
+        scores.push(0);
+      }
+    }
+  } else if (attempt.partStatus === 'esperando_continuar' && attempt.currentPartIndex === 0 && typeof attempt.puntaje === 'number') {
+    // Cerró la primera parte y estaba esperando continuar: su puntaje ya está en `puntaje`.
+    scores.push(attempt.puntaje);
+  }
+
+  // Partes que nunca abrió cuentan 0.
+  for (let i = attempt.currentPartIndex + 1; i < partes.length; i++) {
+    scores.push(0);
+  }
+
+  const finalScore = scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : undefined;
+
+  await prisma.examAttempt.update({
+    where: { id: attemptId },
+    data: {
+      ...updateData,
+      estado: 'finalizado',
+      partStatus: 'finalizada',
+      finishedAt: new Date(),
+      respuestasBorrador: Prisma.DbNull,
+      ...(finalScore !== undefined ? { puntaje: finalScore } : {})
+    }
+  });
+}
+
+/**
+ * Cierra una ventana para todos: la marca como finalizada (nadie más puede
+ * iniciar ni avanzar) y finaliza los intentos que seguían en curso.
+ */
+export async function closeExamWindow(prisma: PrismaClient, windowId: number) {
+  await prisma.examWindow.update({
+    where: { id: windowId },
+    data: { estado: 'finalizada' }
+  });
+
+  const intentosEnCurso = await prisma.examAttempt.findMany({
+    where: { examWindowId: windowId, estado: 'en_progreso' },
+    select: { id: true }
+  });
+
+  let finalizados = 0;
+  for (const intento of intentosEnCurso) {
+    try {
+      await forceFinishAttempt(prisma, intento.id);
+      finalizados++;
+    } catch (error) {
+      console.error(`Error finalizando intento ${intento.id} al cerrar la ventana:`, error);
+    }
+  }
+
+  return { finalizados, total: intentosEnCurso.length };
 }
 
 /**

@@ -476,7 +476,17 @@ export async function getExamById(
 
     // Verificar disponibilidad del examen
     if (inscription.examWindow.sinTiempo) {
-
+      // Sin tiempo: solo deja de estar disponible si el profesor cerró el examen
+      if (inscription.examWindow.estado === 'finalizada') {
+        return {
+          error: {
+            status: 403,
+            error: "El profesor cerró este examen",
+            code: "EXAM_NOT_AVAILABLE",
+            estado: inscription.examWindow.estado
+          } as ExamValidationError
+        };
+      }
     } else {
       // Para ventanas con tiempo, verificar estado y tiempo
       const now = new Date();

@@ -12,6 +12,8 @@ import {
   getExamFilesForProfessorView,
   advancePart,
   continueToNextPart,
+  saveDraftAnswers,
+  getAttemptStatus,
 } from "../services/examAttempt.service.ts";
 
 const ALLOWED_ANSWER_FILE_TYPES: Record<string, string> = {
@@ -279,6 +281,53 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
     } catch (error) {
       console.error('Error continuing to next exam part:', error);
       res.status(500).json({ error: "Error continuando a la siguiente parte" });
+    }
+  });
+
+  // PUT /exam-attempts/:attemptId/draft - Autoguarda las respuestas de la parte en curso
+  router.put("/:attemptId/draft", authenticateToken, requireRole(['student']), async (req, res) => {
+    const attemptId = parseInt(req.params.attemptId);
+    const userId = req.user!.userId;
+
+    if (isNaN(attemptId)) {
+      return res.status(400).json({ error: "ID de intento inválido" });
+    }
+
+    try {
+      const result = await saveDraftAnswers(prisma, attemptId, userId, req.body?.respuestas);
+
+      if (result.error) {
+        return res.status(result.error.status).json({ error: result.error.error });
+      }
+
+      res.json({ ok: true });
+    } catch (error) {
+      console.error('Error saving draft answers:', error);
+      res.status(500).json({ error: "Error guardando respuestas" });
+    }
+  });
+
+  // GET /exam-attempts/:attemptId/status - Estado del intento para consultas periódicas
+  // del alumno (cierre del examen por el profesor)
+  router.get("/:attemptId/status", authenticateToken, requireRole(['student']), async (req, res) => {
+    const attemptId = parseInt(req.params.attemptId);
+    const userId = req.user!.userId;
+
+    if (isNaN(attemptId)) {
+      return res.status(400).json({ error: "ID de intento inválido" });
+    }
+
+    try {
+      const result = await getAttemptStatus(prisma, attemptId, userId);
+
+      if (result.error) {
+        return res.status(result.error.status).json({ error: result.error.error });
+      }
+
+      res.json(result.status);
+    } catch (error) {
+      console.error('Error getting attempt status:', error);
+      res.status(500).json({ error: "Error obteniendo estado del intento" });
     }
   });
 

@@ -206,6 +206,7 @@ model ExamAttempt {
   corregidoAt  DateTime?   // fecha de corrección manual
   currentPartIndex Int     @default(0) // índice (0-based) de la ExamPart en curso, según orden
   partStatus   String      @default("en_curso") // "en_curso" | "esperando_continuar" | "finalizada"
+  respuestasBorrador Json? // respuestas autoguardadas de la parte en curso, se corrigen si el profesor cierra el examen
   examWindow   ExamWindow? @relation(fields: [examWindowId], references: [id])
   exam         Exam        @relation(fields: [examId], references: [id])
   user         User        @relation(fields: [userId], references: [id])

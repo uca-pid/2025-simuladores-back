@@ -8,6 +8,7 @@ import {
   startMillisecondSystem,
   generateUniqueExamWindowCode,
 } from "../services/examWindow.service.ts";
+import { closeExamWindow } from "../services/examAttempt.service.ts";
 
 const ExamWindowRoute = (prisma: PrismaClient) => {
   const router = Router();
@@ -597,6 +598,44 @@ router.get('/disponibles', authenticateToken, requireRole(['student']), async (r
 
     } catch (error: any) {
       console.error('Error cambiando estado activo de ventana:', error);
+      res.status(500).json({ error: 'Error interno del servidor' });
+    }
+  });
+
+  // POST /exam-windows/:id/cerrar - Cierra el examen para todos: nadie puede seguir
+  // rindiendo y los intentos en curso se finalizan con lo que tengan guardado.
+  router.post('/:id/cerrar', authenticateToken, requireRole(['professor']), async (req, res) => {
+    const windowId = parseInt(req.params.id);
+
+    if (isNaN(windowId)) {
+      return res.status(400).json({ error: "ID de ventana inválido" });
+    }
+
+    try {
+      const existingWindow = await prisma.examWindow.findFirst({
+        where: { id: windowId, exam: { profesorId: req.user!.userId } }
+      });
+
+      if (!existingWindow) {
+        return res.status(404).json({ error: 'Ventana no encontrada o no tienes permisos' });
+      }
+
+      if (existingWindow.estado === 'finalizada') {
+        return res.status(400).json({ error: 'El examen ya está cerrado' });
+      }
+
+      const { finalizados, total } = await closeExamWindow(prisma, windowId);
+
+      res.json({
+        success: true,
+        message: total > 0
+          ? `Examen cerrado. Se finalizaron ${finalizados} de ${total} intentos en curso.`
+          : 'Examen cerrado.',
+        finalizados,
+        total
+      });
+    } catch (error) {
+      console.error('Error cerrando ventana:', error);
       res.status(500).json({ error: 'Error interno del servidor' });
     }
   });
