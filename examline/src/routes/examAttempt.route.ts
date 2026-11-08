@@ -271,7 +271,7 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
     }
 
     try {
-      const result = await continueToNextPart(prisma, attemptId, userId);
+      const result = await continueToNextPart(prisma, attemptId, userId, req.body?.codigo);
 
       if (result.error) {
         return res.status(result.error.status).json({ error: result.error.error });
@@ -308,7 +308,7 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
   });
 
   // GET /exam-attempts/:attemptId/status - Estado del intento para consultas periódicas
-  // del alumno (cierre del examen por el profesor)
+  // del alumno (cierre del examen por el profesor, habilitación de la siguiente parte)
   router.get("/:attemptId/status", authenticateToken, requireRole(['student']), async (req, res) => {
     const attemptId = parseInt(req.params.attemptId);
     const userId = req.user!.userId;

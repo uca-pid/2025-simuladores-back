@@ -659,7 +659,8 @@ export async function advancePart(
 export async function continueToNextPart(
   prisma: PrismaClient,
   attemptId: number,
-  userId: number
+  userId: number,
+  codigo?: string
 ) {
   const loaded = await loadAttemptForPartTransition(prisma, attemptId, userId);
   if (loaded.error) return { error: loaded.error };
@@ -674,6 +675,22 @@ export async function continueToNextPart(
     return { error: { status: 400, error: "No hay una siguiente parte" } as PartAdvanceError };
   }
 
+  // Modo "manual": la siguiente parte tiene que estar habilitada por el
+  // profesor (para todos o para este alumno). Modo "codigo": el alumno tiene
+  // que ingresar el código que dicta el profesor.
+  if (attempt.examWindow && !isNextPartUnlocked(attempt.examWindow, attempt, nextIndex)) {
+    if (attempt.examWindow.modoAvanceParte !== 'codigo') {
+      return { error: { status: 403, error: "Esperá a que el profesor habilite la siguiente parte" } as PartAdvanceError };
+    }
+    const codigoIngresado = (codigo || '').trim().toUpperCase();
+    if (!codigoIngresado) {
+      return { error: { status: 403, error: "Ingresá el código que te indique el profesor" } as PartAdvanceError };
+    }
+    if (codigoIngresado !== attempt.examWindow.codigoParte) {
+      return { error: { status: 403, error: "Código incorrecto" } as PartAdvanceError };
+    }
+  }
+
   const updated = await prisma.examAttempt.update({
     where: { id: attemptId },
     data: {
@@ -683,6 +700,66 @@ export async function continueToNextPart(
   });
 
   return { attempt: updated };
+}
+
+/** La parte `partIndex` (0-based) se puede abrir sin código. */
+function isNextPartUnlocked(
+  window: { modoAvanceParte: string; partesHabilitadas: number },
+  attempt: { partesHabilitadas: number },
+  partIndex: number
+): boolean {
+  if (window.modoAvanceParte === 'manual') {
+    return partIndex < window.partesHabilitadas || partIndex < attempt.partesHabilitadas;
+  }
+  if (window.modoAvanceParte === 'codigo') {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Alumnos de una ventana que terminaron una parte y esperan pasar a la
+ * siguiente, con la nota de la parte que cerraron, para que el profesor
+ * decida a quiénes habilitar.
+ */
+export async function getStudentsWaitingNextPart(prisma: PrismaClient, windowId: number) {
+  const window = await prisma.examWindow.findUnique({ where: { id: windowId } });
+  if (!window) return [];
+
+  const intentos = await prisma.examAttempt.findMany({
+    where: { examWindowId: windowId, estado: 'en_progreso', partStatus: 'esperando_continuar' },
+    include: { user: { select: { id: true, nombre: true, email: true } } },
+    orderBy: { user: { nombre: 'asc' } }
+  });
+
+  return intentos.map(intento => ({
+    attemptId: intento.id,
+    alumno: intento.user,
+    parteTerminada: intento.currentPartIndex + 1,
+    puntajeParte: intento.puntaje,
+    habilitado: isNextPartUnlocked(window, intento, intento.currentPartIndex + 1)
+  }));
+}
+
+/**
+ * Habilita la siguiente parte a los alumnos elegidos, todos en la misma
+ * operación para que arranquen a la vez. Solo afecta intentos en curso de
+ * esa ventana; ids ajenos se ignoran.
+ */
+export async function enableNextPartForStudents(prisma: PrismaClient, windowId: number, attemptIds: number[]) {
+  const intentos = await prisma.examAttempt.findMany({
+    where: { id: { in: attemptIds }, examWindowId: windowId, estado: 'en_progreso' },
+    select: { id: true, currentPartIndex: true, partesHabilitadas: true }
+  });
+
+  await prisma.$transaction(intentos.map(intento =>
+    prisma.examAttempt.update({
+      where: { id: intento.id },
+      data: { partesHabilitadas: Math.max(intento.partesHabilitadas, intento.currentPartIndex + 2) }
+    })
+  ));
+
+  return intentos.length;
 }
 
 /**
@@ -720,8 +797,8 @@ export async function saveDraftAnswers(
 }
 
 /**
- * Estado liviano del intento para que el alumno consulte periódicamente
- * si el profesor cerró el examen.
+ * Estado liviano del intento para que el alumno consulte periódicamente:
+ * si el profesor cerró el examen y si la siguiente parte ya está habilitada.
  */
 export async function getAttemptStatus(
   prisma: PrismaClient,
@@ -730,7 +807,10 @@ export async function getAttemptStatus(
 ) {
   const attempt = await prisma.examAttempt.findUnique({
     where: { id: attemptId },
-    include: { examWindow: true }
+    include: {
+      examWindow: true,
+      exam: { select: { _count: { select: { partes: true } } } }
+    }
   });
 
   if (!attempt) {
@@ -740,12 +820,17 @@ export async function getAttemptStatus(
     return { error: { status: 403, error: "No autorizado" } as PartAdvanceError };
   }
 
+  const nextIndex = attempt.currentPartIndex + 1;
+  const hayParteSiguiente = nextIndex < attempt.exam._count.partes;
+
   return {
     status: {
       estado: attempt.estado,
       partStatus: attempt.partStatus,
       currentPartIndex: attempt.currentPartIndex,
-      examenCerrado: attempt.examWindow ? !isWindowOpenForAttempts(attempt.examWindow) : false
+      examenCerrado: attempt.examWindow ? !isWindowOpenForAttempts(attempt.examWindow) : false,
+      siguienteParteHabilitada: hayParteSiguiente && (!attempt.examWindow || isNextPartUnlocked(attempt.examWindow, attempt, nextIndex)),
+      modoAvanceParte: attempt.examWindow?.modoAvanceParte ?? 'libre'
     }
   };
 }

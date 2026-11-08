@@ -88,6 +88,7 @@ const InscriptionRoute = (prisma: PrismaClient) => {
           },
           include: {
             examWindow: {
+              omit: { codigoParte: true },
               include: {
                 exam: {
                   select: { titulo: true, profesorId: true }
@@ -121,6 +122,7 @@ const InscriptionRoute = (prisma: PrismaClient) => {
         },
         include: {
           examWindow: {
+            omit: { codigoParte: true },
             include: {
               exam: {
                 select: { titulo: true, profesorId: true }
@@ -162,6 +164,7 @@ const InscriptionRoute = (prisma: PrismaClient) => {
         },
         include: {
           examWindow: {
+            omit: { codigoParte: true },
             include: {
               exam: {
                 select: { 
@@ -208,6 +211,7 @@ const InscriptionRoute = (prisma: PrismaClient) => {
         },
         include: {
           examWindow: {
+            omit: { codigoParte: true },
             include: {
               exam: { select: { titulo: true } }
             }

@@ -68,6 +68,11 @@ export function isWindowOpenForAttempts(window: {
   return window.estado === 'en_curso' && now >= startDate && now <= endDate;
 }
 
+/** Código corto que el profesor dicta para que los alumnos pasen a la siguiente parte. */
+export function generateCodigoParte(): string {
+  return randomCodigo(5);
+}
+
 // Convierte string de filtro a Date en hora local
 export function parseFiltroFecha(dateString: string): Date {
   if (!dateString) throw new Error("No se recibió fecha válida");
