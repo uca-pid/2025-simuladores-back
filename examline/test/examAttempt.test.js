@@ -98,7 +98,7 @@ describe("ExamAttemptRoute", () => {
         id: 1,
         userId: 1,
         estado: "en_progreso",
-        exam: { tipo: "programming" },
+        exam: { partes: [{ tipo: "programming" }] },
       });
       prismaMock.examAttempt.update.mockResolvedValue({ id: 1, codigoProgramacion: "print('ok')" });
 

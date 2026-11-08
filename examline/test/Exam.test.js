@@ -125,6 +125,7 @@ describe('ExamRoute tests', () => {
             tipo: 'programming',
             lenguajeProgramacion: 'python',
             enunciadoProgramacion: 'Do something',
+            testCases: [{ description: 'Imprime hi', input: '', expectedOutput: 'hi' }],
           },
         ],
         referenceFiles: [

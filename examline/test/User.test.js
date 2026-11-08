@@ -56,6 +56,9 @@ const prismaMock = {
   exam: {
     deleteMany: jest.fn(),
   },
+  questionBank: {
+    deleteMany: jest.fn(),
+  },
 };
 
 const app = express();
