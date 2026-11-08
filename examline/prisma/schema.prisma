@@ -89,6 +89,7 @@ model Pregunta {
   puntos   Float  @default(1) // Peso/puntaje de esta pregunta dentro de la parte (default 1 = todas equivalen igual, como antes)
   orden    Int?
   imagenUrl String?
+  imagenesOpciones Json? // Solo multiple_choice/multiple_response: array paralelo a `opciones` con la URL de imagen de cada opción (o null)
   partId   Int
   parte    ExamPart @relation(fields: [partId], references: [id], onDelete: Cascade)
   respuestasEstudiante RespuestaEstudiante[] // Respuestas de estudiantes a esta pregunta
@@ -272,6 +273,7 @@ model QuestionBank {
   correctas Json?    // Solo multiple_response: array de índices de las opciones correctas
   tags      Json     @default("[]")
   imagenUrl String?  // Imagen opcional de la pregunta (solo multiple_choice)
+  imagenesOpciones Json? // Imágenes opcionales por opción (ver Pregunta.imagenesOpciones)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   profesor  User     @relation(fields: [profesorId], references: [id])

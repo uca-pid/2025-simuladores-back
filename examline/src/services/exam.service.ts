@@ -71,6 +71,22 @@ export const TIPOS_PREGUNTA_TEORICA = [
 ];
 const DIFICULTADES = ['facil', 'media', 'dificil'];
 
+/**
+ * Imágenes por opción: solo aplican a multiple_choice/multiple_response. Se guarda
+ * un array paralelo a `opciones` (URL o null), o undefined si ninguna opción tiene
+ * imagen (así la columna queda en su default NULL al crear la pregunta).
+ */
+export function normalizarImagenesOpciones(pregunta: { tipo?: string; opciones?: any; imagenesOpciones?: any }) {
+  const tipo = pregunta.tipo || 'multiple_choice';
+  if (!['multiple_choice', 'multiple_response'].includes(tipo)) return undefined;
+  if (!Array.isArray(pregunta.imagenesOpciones) || !Array.isArray(pregunta.opciones)) return undefined;
+  const imagenes = pregunta.opciones.map((_: any, i: number) => {
+    const url = pregunta.imagenesOpciones[i];
+    return typeof url === 'string' && url.trim() ? url : null;
+  });
+  return imagenes.some((url: string | null) => url) ? imagenes : undefined;
+}
+
 function validatePregunta(pregunta: any, partIndex: number, pIndex: number): ExamValidationError | null {
   const { tipo = 'multiple_choice', dificultad = 'media', texto } = pregunta;
 
@@ -292,6 +308,7 @@ export async function createExam(
             opciones: p.opciones ?? [],
             orden: p.orden ?? pIndex + 1,
             imagenUrl: p.imagenUrl || null,
+            imagenesOpciones: normalizarImagenesOpciones(p),
           }))
         });
       }
@@ -731,6 +748,7 @@ export async function updateExam(
               opciones: p.opciones ?? [],
               orden: p.orden ?? pIndex + 1,
               imagenUrl: p.imagenUrl || null,
+            imagenesOpciones: normalizarImagenesOpciones(p),
             }))
           });
         }
