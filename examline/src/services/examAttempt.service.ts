@@ -2,6 +2,7 @@ import { Prisma, type PrismaClient } from "@prisma/client";
 import { loadExamDatasets } from "./exam.service.ts";
 import { isWindowOpenForAttempts } from "./examWindow.service.ts";
 import { getMinutosExtra } from "./examTimeExtension.service.ts";
+import { traducirRespuestaAlumno } from "../utils/ofuscacionOpciones.ts";
 
 /**
  * Resultado de validar disponibilidad de una inscripción/ventana para iniciar un intento.
@@ -340,9 +341,26 @@ export async function prepareMultipleChoiceFinishData(
   prisma: PrismaClient,
   attemptId: number,
   partId: number,
-  respuestas: any
+  respuestasMostradas: any
 ): Promise<any> {
   const updateData: any = {};
+
+  const parte = await prisma.examPart.findUnique({
+    where: { id: partId },
+    include: { preguntas: true }
+  });
+  const attempt = await prisma.examAttempt.findUnique({ where: { id: attemptId } });
+
+  // El alumno ve las opciones mezcladas y responde con posiciones mostradas:
+  // se traducen a índices reales antes de guardar y corregir (ver ofuscacionOpciones.ts)
+  let respuestas = respuestasMostradas;
+  if (respuestasMostradas && typeof respuestasMostradas === 'object' && parte && attempt) {
+    const porId = new Map(parte.preguntas.map(p => [p.id, p]));
+    respuestas = Object.fromEntries(Object.entries(respuestasMostradas).map(([preguntaId, valor]) => {
+      const pregunta = porId.get(parseInt(preguntaId));
+      return [preguntaId, pregunta ? traducirRespuestaAlumno(pregunta, valor, attempt.userId, attempt.examId) : valor];
+    }));
+  }
 
   // Guardar respuestas en la nueva tabla RespuestaEstudiante
   if (respuestas && typeof respuestas === 'object') {
@@ -359,17 +377,11 @@ export async function prepareMultipleChoiceFinishData(
     });
   }
 
-  // Calcular puntaje automáticamente (solo sobre las preguntas de esta parte)
-  const parte = await prisma.examPart.findUnique({
-    where: { id: partId },
-    include: { preguntas: true }
-  });
-
+  // Calcular puntaje automáticamente (solo sobre las preguntas de esta parte).
   // Si el examen usa pool balanceado y/o orden aleatorio, `ordenPreguntas` tiene
   // exactamente el subconjunto de preguntas que le tocó a ESTE alumno (puede ser
   // menor al pool completo de la parte). Hay que calificar solo sobre esas,
   // nunca sobre el pool entero, o el denominador quedaría mal para el alumno.
-  const attempt = await prisma.examAttempt.findUnique({ where: { id: attemptId } });
   const ordenPreguntas = Array.isArray(attempt?.ordenPreguntas) ? attempt!.ordenPreguntas as number[] : null;
 
   const preguntasAEvaluar = parte && ordenPreguntas
