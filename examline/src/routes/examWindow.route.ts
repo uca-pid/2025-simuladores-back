@@ -17,6 +17,62 @@ import {
 
 const MODOS_AVANCE_PARTE = ['libre', 'manual', 'codigo'];
 
+// Campos de configuración de Safe Exam Browser que el profesor edita en la ventana
+const sebBooleanFields = [
+  "sebUnsafeMode",
+  "sebShowTaskBar",
+  "sebAllowAddressBar",
+  "sebEnableBrowserWindowToolbar",
+  "sebAllowQuit",
+  "sebAllowReload",
+  "sebAllowBrowsingBackForward",
+  "sebEnableEsc",
+  "sebEnableAltTab",
+  "sebEnableAltEsc",
+  "sebEnableAltF4",
+  "sebEnableStartMenu",
+  "sebEnableRightMouse",
+  "sebEnablePrintScreen",
+  "sebEnableFunctionKeys",
+  "sebEnableCtrlEsc",
+  "sebEnableTaskManager",
+  "sebCreateNewDesktop",
+  "sebLockOnMessageSocketClose",
+  "sebAllowSwitchToApplications",
+  "sebAllowDeveloperConsole",
+  "sebAllowZoom",
+  "sebAllowTeams",
+  "sebBrowserWindowAllowMinimize",
+  "sebAllowDownloads",
+  "sebAllowUploads",
+] as const;
+
+const sebNumberFields = ["sebKioskMode", "sebBrowserViewMode", "sebClipboardPolicy"] as const;
+const sebStringFields = ["sebQuitUrl", "sebQuitPassword", "sebSettingsPassword"] as const;
+
+/** Toma del body solo los campos de SEB presentes, con su tipo correcto. */
+function getSEBSettings(body: Record<string, any>) {
+  const settings: Record<string, boolean | number | string> = {};
+
+  for (const field of sebBooleanFields) {
+    if (body[field] !== undefined) settings[field] = Boolean(body[field]);
+  }
+
+  for (const field of sebNumberFields) {
+    if (body[field] !== undefined && !isNaN(Number(body[field]))) settings[field] = Number(body[field]);
+  }
+
+  for (const field of sebStringFields) {
+    if (typeof body[field] === 'string' && body[field].trim()) settings[field] = body[field].trim();
+  }
+
+  if (settings.sebKioskMode === undefined && body.kioskMode !== undefined) {
+    settings.sebKioskMode = Number(body.kioskMode);
+  }
+
+  return settings;
+}
+
 const ExamWindowRoute = (prisma: PrismaClient) => {
   const router = Router();
 
@@ -99,6 +155,7 @@ const ExamWindowRoute = (prisma: PrismaClient) => {
           usaSEB: Boolean(usaSEB),
           kioskMode: kioskMode,
           modoAvanceParte: modoAvanceParte || 'libre',
+          ...getSEBSettings(req.body),
           codigoParte: modoAvanceParte === 'codigo' ? generateCodigoParte() : null,
           estado: isSinTiempo ? 'programada' : 'programada'
         };
@@ -352,7 +409,7 @@ router.get('/disponibles', authenticateToken, requireRole(['student']), async (r
   // Actualizar ventana de examen
   router.put('/:id', authenticateToken, requireRole(['professor']), async (req, res) => {
     const windowId = parseInt(req.params.id);
-    const { nombre, fechaInicio, duracion, modalidad, cupoMaximo, notas, activa, estado, usaSEB, sinTiempo, modoAvanceParte } = req.body;
+    const { nombre, fechaInicio, duracion, modalidad, cupoMaximo, notas, activa, estado, usaSEB, sinTiempo, modoAvanceParte, kioskMode } = req.body;
 
     try {
       // Verificar que la ventana existe y pertenece al profesor
@@ -381,6 +438,8 @@ router.get('/disponibles', authenticateToken, requireRole(['student']), async (r
       if (estado) updateData.estado = estado;
       if (usaSEB !== undefined) updateData.usaSEB = Boolean(usaSEB);
       if (sinTiempo !== undefined) updateData.sinTiempo = Boolean(sinTiempo);
+      if (kioskMode !== undefined) updateData.kioskMode = Number(kioskMode);
+      Object.assign(updateData, getSEBSettings(req.body));
       if (modoAvanceParte !== undefined) {
         if (!MODOS_AVANCE_PARTE.includes(modoAvanceParte)) {
           return res.status(400).json({ error: 'Modo de avance entre partes inválido' });

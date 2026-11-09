@@ -18,7 +18,6 @@ const ExamStartRoute = (prisma: PrismaClient) => {
   // Ruta para descargar el .seb dinámico
   router.get("/download/:examId/:windowId/:token", async (req: Request, res: Response) => {
     const { examId, windowId, token } = req.params
-    const contra = "12345" // contraseña para quit/admin
 
     // Validar que el examen exista en la base de datos
     const exam = await prisma.exam.findUnique({
@@ -48,8 +47,8 @@ const ExamStartRoute = (prisma: PrismaClient) => {
       token,
       frontUrl,
       backendUrl: BACKEND_URL,
-      quitPassword: contra,
-      settingsPassword: contra,
+      // Sin contraseñas acá: buildSEBXml usa las configuradas en la ventana
+      // (sebQuitPassword / sebSettingsPassword, por defecto "12345").
     }
 
     // Construir el XML usando la configuración de la base de datos

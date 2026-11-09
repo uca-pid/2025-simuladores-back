@@ -25,6 +25,8 @@ export interface SEBConfigParams {
  * Interfaz para las opciones de configuración del examen
  */
 export interface ExamWindowSEBSettings {
+  // Modo inseguro (sobrescribe restricciones)
+  unsafeMode?: boolean;
   // Modo kiosk
   kioskMode: number;
   // Mostrar barra de tareas
@@ -57,6 +59,14 @@ export interface ExamWindowSEBSettings {
   enablePrintScreen: boolean;
   // Habilitar teclas de función F1-F12
   enableFunctionKeys: boolean;
+  // Permitir Zoom
+  allowZoom?: boolean;
+  // Permitir Teams
+  allowTeams?: boolean;
+  // Permitir minimizar la ventana del navegador
+  browserWindowAllowMinimize?: boolean;
+  // Permitir Administrador de Tareas
+  enableTaskManager?: boolean;
   // Política de portapapeles (0=permitir todo, 1=bloquear entrada, 2=bloquear todo)
   clipboardPolicy: number;
   // Crear nuevo escritorio
@@ -99,6 +109,7 @@ export async function getExamWindowSEBSettings(
 
   // Valores por defecto - leer desde la base de datos
  const defaults: ExamWindowSEBSettings = {
+    unsafeMode: (examWindow as any).sebUnsafeMode ?? false,
     // Modo kiosk
     kioskMode: (examWindow as any).sebKioskMode ?? (examWindow.kioskMode || 0),
     showTaskBar: (examWindow as any).sebShowTaskBar ?? examWindow.kioskMode === 1,
@@ -134,6 +145,12 @@ export async function getExamWindowSEBSettings(
     quitUrl: (examWindow as any).sebQuitUrl ?? "https://ferocarcineto.com.ar/",
     quitPassword: (examWindow as any).sebQuitPassword ?? "12345",
     settingsPassword: (examWindow as any).sebSettingsPassword ?? "12345",
+
+    // Virtual y Ventanas
+    allowZoom: (examWindow as any).sebAllowZoom ?? false,
+    allowTeams: (examWindow as any).sebAllowTeams ?? false,
+    browserWindowAllowMinimize: (examWindow as any).sebBrowserWindowAllowMinimize ?? false,
+    enableTaskManager: (examWindow as any).sebEnableTaskManager ?? false,
   };
 
   return defaults;
@@ -154,6 +171,26 @@ export function buildSEBXml(
 
   // Escapar URL para XML
   const escapedFrontUrl = frontUrl.replace(/&/g, "&amp;");
+
+  // Si estamos en unsafeMode, sobrescribir las restricciones
+  if (settings.unsafeMode) {
+    settings.kioskMode = 0;
+    settings.showTaskBar = true;
+    settings.allowQuit = true;
+    settings.enableEsc = true;
+    settings.enableAltTab = true;
+    settings.enableAltEsc = true;
+    settings.enableAltF4 = true;
+    settings.enableStartMenu = true;
+    settings.enableRightMouse = true;
+    settings.allowDeveloperConsole = true;
+    settings.clipboardPolicy = 0;
+    settings.createNewDesktop = false;
+  }
+
+  if (settings.enableTaskManager) {
+    settings.createNewDesktop = false;
+  }
 
   // Determinar valores basados en configuración
   const kioskModeValue = settings.kioskMode;
@@ -187,14 +224,20 @@ export function buildSEBXml(
     <true />
     <key>browserWindowAllowReload</key>
     <${settings.allowReload ? "true" : "false"} />
+    <key>browserWindowAllowMinimize</key>
+    <${settings.browserWindowAllowMinimize ? "true" : "false"} />
     <key>showTaskBar</key>
     <${settings.showTaskBar ? "true" : "false"}/>
     <key>allowSwitchToApplications</key>
-    <${settings.allowSwitchToApplications ? "true" : "false"}/>
+    <${(settings.allowSwitchToApplications || settings.allowZoom || settings.allowTeams) ? "true" : "false"}/>
     <key>enableAltEsc</key>
     <${settings.enableAltEsc ? "true" : "false"} />
     <key>enableAltTab</key>
     <${settings.enableAltTab ? "true" : "false"} />
+    <key>enableCtrlAltDel</key>
+    <${settings.enableTaskManager ? "true" : "false"} />
+    <key>enableTaskManager</key>
+    <${settings.enableTaskManager ? "true" : "false"} />
     <key>enableEsc</key>
     <${settings.enableEsc ? "true" : "false"} />
     <key>urlFilterEnable</key>
@@ -799,7 +842,7 @@ export function buildSEBXml(
       </dict>
       <dict>
         <key>active</key>
-        <true />
+        <${settings.allowTeams ? "false" : "true"} />
         <key>currentUser</key>
         <true />
         <key>strongKill</key>
@@ -821,7 +864,7 @@ export function buildSEBXml(
       </dict>
       <dict>
         <key>active</key>
-        <true />
+        <${settings.allowTeams ? "false" : "true"} />
         <key>currentUser</key>
         <true />
         <key>strongKill</key>
@@ -975,7 +1018,7 @@ export function buildSEBXml(
       </dict>
       <dict>
         <key>active</key>
-        <true />
+        <${settings.allowZoom ? "false" : "true"} />
         <key>currentUser</key>
         <true />
         <key>strongKill</key>
@@ -1656,7 +1699,7 @@ export function buildSEBXml(
     <key>allowScreenSharing</key>
     <true />
     <key>enablePrivateClipboard</key>
-    <true />
+    <${settings.clipboardPolicy === 0 ? "false" : "true"} />
     <key>createNewDesktop</key>
     <${settings.createNewDesktop ? "true" : "false"} />
     <key>killExplorerShell</key>
@@ -1718,7 +1761,7 @@ export function buildSEBXml(
     <key>insideSebEnableChangeAPassword</key>
     <false />
     <key>insideSebEnableStartTaskManager</key>
-    <false />
+    <${settings.enableTaskManager ? "true" : "false"} />
     <key>insideSebEnableLogOff</key>
     <false />
     <key>insideSebEnableShutDown</key>
@@ -1777,6 +1820,64 @@ export function buildSEBXml(
     <true />
     <key>systemAlwaysOn</key>
     <true />
+    ${(settings.allowZoom || settings.allowTeams || settings.enableTaskManager) ? `
+    <key>permittedApplications</key>
+    <array>
+      ${settings.enableTaskManager ? `
+      <dict>
+        <key>active</key><true/>
+        <key>allowUserToChooseApp</key><false/>
+        <key>allowedExecutableMac</key><string>Activity Monitor.app</string>
+        <key>allowedExecutableWin</key><string>taskmgr.exe</string>
+        <key>description</key><string>Task Manager</string>
+        <key>executable</key><string>taskmgr.exe</string>
+        <key>identifier</key><string>TaskManager</string>
+        <key>originalName</key><string>taskmgr.exe</string>
+        <key>os</key><integer>1</integer>
+        <key>title</key><string>Task Manager</string>
+      </dict>
+      ` : ''}
+      ${settings.allowZoom ? `
+      <dict>
+        <key>active</key><true/>
+        <key>allowUserToChooseApp</key><false/>
+        <key>allowedExecutableMac</key><string>zoom.us.app</string>
+        <key>allowedExecutableWin</key><string>Zoom.exe</string>
+        <key>description</key><string>Zoom</string>
+        <key>executable</key><string>Zoom.exe</string>
+        <key>identifier</key><string>Zoom</string>
+        <key>originalName</key><string>Zoom.exe</string>
+        <key>os</key><integer>1</integer>
+        <key>title</key><string>Zoom</string>
+      </dict>
+      ` : ''}
+      ${settings.allowTeams ? `
+      <dict>
+        <key>active</key><true/>
+        <key>allowUserToChooseApp</key><false/>
+        <key>allowedExecutableMac</key><string>Microsoft Teams.app</string>
+        <key>allowedExecutableWin</key><string>Teams.exe</string>
+        <key>description</key><string>Microsoft Teams</string>
+        <key>executable</key><string>Teams.exe</string>
+        <key>identifier</key><string>Teams</string>
+        <key>originalName</key><string>Teams.exe</string>
+        <key>os</key><integer>1</integer>
+        <key>title</key><string>Teams</string>
+      </dict>
+      <dict>
+        <key>active</key><true/>
+        <key>allowUserToChooseApp</key><false/>
+        <key>allowedExecutableMac</key><string>Microsoft Teams.app</string>
+        <key>allowedExecutableWin</key><string>ms-teams.exe</string>
+        <key>description</key><string>Microsoft Teams (New)</string>
+        <key>executable</key><string>ms-teams.exe</string>
+        <key>identifier</key><string>Teams New</string>
+        <key>originalName</key><string>ms-teams.exe</string>
+        <key>os</key><integer>1</integer>
+        <key>title</key><string>Teams New</string>
+      </dict>
+      ` : ''}
+    </array>` : ''}
   </dict>
 </plist>`;
 

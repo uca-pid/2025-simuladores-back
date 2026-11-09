@@ -166,6 +166,13 @@ model ExamWindow {
   // Archivos
   sebAllowDownloads       Boolean @default(true)
   sebAllowUploads         Boolean @default(false)
+
+  // Aplicaciones permitidas y modo de pruebas
+  sebUnsafeMode           Boolean @default(false) // Desactiva todas las restricciones (solo para probar la configuración)
+  sebEnableTaskManager    Boolean @default(false)
+  sebAllowZoom            Boolean @default(false)
+  sebAllowTeams           Boolean @default(false)
+  sebBrowserWindowAllowMinimize Boolean @default(false)
   
   // URLs
   sebQuitUrl              String  @default("https://ferocarcineto.com.ar/")
