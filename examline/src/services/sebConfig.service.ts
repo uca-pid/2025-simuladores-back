@@ -25,6 +25,8 @@ export interface SEBConfigParams {
  * Interfaz para las opciones de configuración del examen
  */
 export interface ExamWindowSEBSettings {
+  // Modo inseguro (sobrescribe restricciones)
+  unsafeMode?: boolean;
   // Modo kiosk
   kioskMode: number;
   // Mostrar barra de tareas
@@ -57,6 +59,14 @@ export interface ExamWindowSEBSettings {
   enablePrintScreen: boolean;
   // Habilitar teclas de función F1-F12
   enableFunctionKeys: boolean;
+  // Permitir Zoom
+  allowZoom?: boolean;
+  // Permitir Teams
+  allowTeams?: boolean;
+  // Permitir minimizar la ventana del navegador
+  browserWindowAllowMinimize?: boolean;
+  // Permitir Administrador de Tareas
+  enableTaskManager?: boolean;
   // Política de portapapeles (0=permitir todo, 1=bloquear entrada, 2=bloquear todo)
   clipboardPolicy: number;
   // Crear nuevo escritorio
@@ -97,46 +107,64 @@ export async function getExamWindowSEBSettings(
     return null;
   }
 
-  // Valores por defecto - leer desde la base de datos
- const defaults: ExamWindowSEBSettings = {
-    // Modo kiosk
-    kioskMode: (examWindow as any).sebKioskMode ?? (examWindow.kioskMode || 0),
-    showTaskBar: (examWindow as any).sebShowTaskBar ?? examWindow.kioskMode === 1,
-    allowQuit: (examWindow as any).sebAllowQuit ?? true,
-    browserViewMode: (examWindow as any).sebBrowserViewMode ?? (examWindow.kioskMode || 0),
-    allowReload: (examWindow as any).sebAllowReload ?? true,
-    allowAddressBar: (examWindow as any).sebAllowAddressBar ?? false,
-    enableBrowserWindowToolbar: (examWindow as any).sebEnableBrowserWindowToolbar ?? false,
-    allowBrowsingBackForward: (examWindow as any).sebAllowBrowsingBackForward ?? false,
-    
-    // Teclado
-    enableEsc: (examWindow as any).sebEnableEsc ?? false,
-    enableAltTab: (examWindow as any).sebEnableAltTab ?? false,
-    enableAltEsc: (examWindow as any).sebEnableAltEsc ?? false,
-    enableAltF4: (examWindow as any).sebEnableAltF4 ?? false,
-    enableStartMenu: (examWindow as any).sebEnableStartMenu ?? false,
-    enableRightMouse: (examWindow as any).sebEnableRightMouse ?? true,
-    enablePrintScreen: (examWindow as any).sebEnablePrintScreen ?? true,
-    enableFunctionKeys: (examWindow as any).sebEnableFunctionKeys ?? true,
-    
-    // Seguridad
-    clipboardPolicy: (examWindow as any).sebClipboardPolicy ?? 2,
-    createNewDesktop: (examWindow as any).sebCreateNewDesktop ?? true,
-    lockOnMessageSocketClose: (examWindow as any).sebLockOnMessageSocketClose ?? true,
-    allowSwitchToApplications: (examWindow as any).sebAllowSwitchToApplications ?? false,
-    allowDeveloperConsole: (examWindow as any).sebAllowDeveloperConsole ?? false,
-    
-    // Archivos
-    allowDownloads: (examWindow as any).sebAllowDownloads ?? true,
-    allowUploads: (examWindow as any).sebAllowUploads ?? false,
-    
-    // URLs y contraseñas
-    quitUrl: (examWindow as any).sebQuitUrl ?? "https://ferocarcineto.com.ar/",
-    quitPassword: (examWindow as any).sebQuitPassword ?? "12345",
-    settingsPassword: (examWindow as any).sebSettingsPassword ?? "12345",
-  };
+  return sebSettingsDesde(examWindow);
+}
 
-  return defaults;
+/**
+ * Arma la configuración de SEB a partir de los campos seb* de una ventana: la
+ * guardada en la base, o la del formulario sin guardar (al probar la
+ * configuración). Lo que falta toma el valor por defecto.
+ */
+export function sebSettingsDesde(fuente: Record<string, any>): ExamWindowSEBSettings {
+  const bool = (valor: any, porDefecto: boolean) => (valor === undefined || valor === null ? porDefecto : Boolean(valor));
+  const num = (valor: any, porDefecto: number) => (valor === undefined || valor === null || isNaN(Number(valor)) ? porDefecto : Number(valor));
+  const texto = (valor: any, porDefecto: string) => (typeof valor === 'string' && valor.trim() ? valor.trim() : porDefecto);
+  const kioskMode = num(fuente.kioskMode, 0);
+
+  return {
+    unsafeMode: bool(fuente.sebUnsafeMode, false),
+    // Modo kiosk
+    kioskMode: num(fuente.sebKioskMode, kioskMode),
+    showTaskBar: bool(fuente.sebShowTaskBar, kioskMode === 1),
+    allowQuit: bool(fuente.sebAllowQuit, true),
+    browserViewMode: num(fuente.sebBrowserViewMode, kioskMode),
+    allowReload: bool(fuente.sebAllowReload, true),
+    allowAddressBar: bool(fuente.sebAllowAddressBar, false),
+    enableBrowserWindowToolbar: bool(fuente.sebEnableBrowserWindowToolbar, false),
+    allowBrowsingBackForward: bool(fuente.sebAllowBrowsingBackForward, false),
+
+    // Teclado
+    enableEsc: bool(fuente.sebEnableEsc, false),
+    enableAltTab: bool(fuente.sebEnableAltTab, false),
+    enableAltEsc: bool(fuente.sebEnableAltEsc, false),
+    enableAltF4: bool(fuente.sebEnableAltF4, false),
+    enableStartMenu: bool(fuente.sebEnableStartMenu, false),
+    enableRightMouse: bool(fuente.sebEnableRightMouse, true),
+    enablePrintScreen: bool(fuente.sebEnablePrintScreen, true),
+    enableFunctionKeys: bool(fuente.sebEnableFunctionKeys, true),
+
+    // Seguridad
+    clipboardPolicy: num(fuente.sebClipboardPolicy, 2),
+    createNewDesktop: bool(fuente.sebCreateNewDesktop, true),
+    lockOnMessageSocketClose: bool(fuente.sebLockOnMessageSocketClose, true),
+    allowSwitchToApplications: bool(fuente.sebAllowSwitchToApplications, false),
+    allowDeveloperConsole: bool(fuente.sebAllowDeveloperConsole, false),
+
+    // Archivos
+    allowDownloads: bool(fuente.sebAllowDownloads, true),
+    allowUploads: bool(fuente.sebAllowUploads, false),
+
+    // URLs y contraseñas
+    quitUrl: texto(fuente.sebQuitUrl, "https://ferocarcineto.com.ar/"),
+    quitPassword: texto(fuente.sebQuitPassword, "12345"),
+    settingsPassword: texto(fuente.sebSettingsPassword, "12345"),
+
+    // Virtual y Ventanas
+    allowZoom: bool(fuente.sebAllowZoom, false),
+    allowTeams: bool(fuente.sebAllowTeams, false),
+    browserWindowAllowMinimize: bool(fuente.sebBrowserWindowAllowMinimize, false),
+    enableTaskManager: bool(fuente.sebEnableTaskManager, false),
+  };
 }
 
 /**
@@ -154,6 +182,26 @@ export function buildSEBXml(
 
   // Escapar URL para XML
   const escapedFrontUrl = frontUrl.replace(/&/g, "&amp;");
+
+  // Si estamos en unsafeMode, sobrescribir las restricciones
+  if (settings.unsafeMode) {
+    settings.kioskMode = 0;
+    settings.showTaskBar = true;
+    settings.allowQuit = true;
+    settings.enableEsc = true;
+    settings.enableAltTab = true;
+    settings.enableAltEsc = true;
+    settings.enableAltF4 = true;
+    settings.enableStartMenu = true;
+    settings.enableRightMouse = true;
+    settings.allowDeveloperConsole = true;
+    settings.clipboardPolicy = 0;
+    settings.createNewDesktop = false;
+  }
+
+  if (settings.enableTaskManager) {
+    settings.createNewDesktop = false;
+  }
 
   // Determinar valores basados en configuración
   const kioskModeValue = settings.kioskMode;
@@ -187,14 +235,20 @@ export function buildSEBXml(
     <true />
     <key>browserWindowAllowReload</key>
     <${settings.allowReload ? "true" : "false"} />
+    <key>browserWindowAllowMinimize</key>
+    <${settings.browserWindowAllowMinimize ? "true" : "false"} />
     <key>showTaskBar</key>
     <${settings.showTaskBar ? "true" : "false"}/>
     <key>allowSwitchToApplications</key>
-    <${settings.allowSwitchToApplications ? "true" : "false"}/>
+    <${(settings.allowSwitchToApplications || settings.allowZoom || settings.allowTeams) ? "true" : "false"}/>
     <key>enableAltEsc</key>
     <${settings.enableAltEsc ? "true" : "false"} />
     <key>enableAltTab</key>
     <${settings.enableAltTab ? "true" : "false"} />
+    <key>enableCtrlAltDel</key>
+    <${settings.enableTaskManager ? "true" : "false"} />
+    <key>enableTaskManager</key>
+    <${settings.enableTaskManager ? "true" : "false"} />
     <key>enableEsc</key>
     <${settings.enableEsc ? "true" : "false"} />
     <key>urlFilterEnable</key>
@@ -799,7 +853,7 @@ export function buildSEBXml(
       </dict>
       <dict>
         <key>active</key>
-        <true />
+        <${settings.allowTeams ? "false" : "true"} />
         <key>currentUser</key>
         <true />
         <key>strongKill</key>
@@ -821,7 +875,7 @@ export function buildSEBXml(
       </dict>
       <dict>
         <key>active</key>
-        <true />
+        <${settings.allowTeams ? "false" : "true"} />
         <key>currentUser</key>
         <true />
         <key>strongKill</key>
@@ -975,7 +1029,7 @@ export function buildSEBXml(
       </dict>
       <dict>
         <key>active</key>
-        <true />
+        <${settings.allowZoom ? "false" : "true"} />
         <key>currentUser</key>
         <true />
         <key>strongKill</key>
@@ -1656,7 +1710,7 @@ export function buildSEBXml(
     <key>allowScreenSharing</key>
     <true />
     <key>enablePrivateClipboard</key>
-    <true />
+    <${settings.clipboardPolicy === 0 ? "false" : "true"} />
     <key>createNewDesktop</key>
     <${settings.createNewDesktop ? "true" : "false"} />
     <key>killExplorerShell</key>
@@ -1718,7 +1772,7 @@ export function buildSEBXml(
     <key>insideSebEnableChangeAPassword</key>
     <false />
     <key>insideSebEnableStartTaskManager</key>
-    <false />
+    <${settings.enableTaskManager ? "true" : "false"} />
     <key>insideSebEnableLogOff</key>
     <false />
     <key>insideSebEnableShutDown</key>
@@ -1777,6 +1831,64 @@ export function buildSEBXml(
     <true />
     <key>systemAlwaysOn</key>
     <true />
+    ${(settings.allowZoom || settings.allowTeams || settings.enableTaskManager) ? `
+    <key>permittedApplications</key>
+    <array>
+      ${settings.enableTaskManager ? `
+      <dict>
+        <key>active</key><true/>
+        <key>allowUserToChooseApp</key><false/>
+        <key>allowedExecutableMac</key><string>Activity Monitor.app</string>
+        <key>allowedExecutableWin</key><string>taskmgr.exe</string>
+        <key>description</key><string>Task Manager</string>
+        <key>executable</key><string>taskmgr.exe</string>
+        <key>identifier</key><string>TaskManager</string>
+        <key>originalName</key><string>taskmgr.exe</string>
+        <key>os</key><integer>1</integer>
+        <key>title</key><string>Task Manager</string>
+      </dict>
+      ` : ''}
+      ${settings.allowZoom ? `
+      <dict>
+        <key>active</key><true/>
+        <key>allowUserToChooseApp</key><false/>
+        <key>allowedExecutableMac</key><string>zoom.us.app</string>
+        <key>allowedExecutableWin</key><string>Zoom.exe</string>
+        <key>description</key><string>Zoom</string>
+        <key>executable</key><string>Zoom.exe</string>
+        <key>identifier</key><string>Zoom</string>
+        <key>originalName</key><string>Zoom.exe</string>
+        <key>os</key><integer>1</integer>
+        <key>title</key><string>Zoom</string>
+      </dict>
+      ` : ''}
+      ${settings.allowTeams ? `
+      <dict>
+        <key>active</key><true/>
+        <key>allowUserToChooseApp</key><false/>
+        <key>allowedExecutableMac</key><string>Microsoft Teams.app</string>
+        <key>allowedExecutableWin</key><string>Teams.exe</string>
+        <key>description</key><string>Microsoft Teams</string>
+        <key>executable</key><string>Teams.exe</string>
+        <key>identifier</key><string>Teams</string>
+        <key>originalName</key><string>Teams.exe</string>
+        <key>os</key><integer>1</integer>
+        <key>title</key><string>Teams</string>
+      </dict>
+      <dict>
+        <key>active</key><true/>
+        <key>allowUserToChooseApp</key><false/>
+        <key>allowedExecutableMac</key><string>Microsoft Teams.app</string>
+        <key>allowedExecutableWin</key><string>ms-teams.exe</string>
+        <key>description</key><string>Microsoft Teams (New)</string>
+        <key>executable</key><string>ms-teams.exe</string>
+        <key>identifier</key><string>Teams New</string>
+        <key>originalName</key><string>ms-teams.exe</string>
+        <key>os</key><integer>1</integer>
+        <key>title</key><string>Teams New</string>
+      </dict>
+      ` : ''}
+    </array>` : ''}
   </dict>
 </plist>`;
 

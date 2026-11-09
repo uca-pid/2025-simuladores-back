@@ -2,6 +2,7 @@ import { type PrismaClient } from "@prisma/client";
 import { readFile } from "fs/promises";
 import path from "path";
 import CodeExecutionService from "./codeExecution.service.ts";
+import { finConExtension, getMinutosExtra } from "./examTimeExtension.service.ts";
 
 /**
  * Descarga todos los archivos de dataset asociados a un examen (si tiene),
@@ -505,10 +506,16 @@ export async function getExamById(
         };
       }
     } else {
-      // Para ventanas con tiempo, verificar estado y tiempo
+      // Para ventanas con tiempo, verificar estado y tiempo (más el tiempo extra
+      // que el profesor le haya dado a este alumno o a todos)
       const now = new Date();
       const startDate = new Date(inscription.examWindow.fechaInicio!);
-      const endDate = new Date(startDate.getTime() + (inscription.examWindow.duracion! * 60 * 1000));
+      const intento = await prisma.examAttempt.findFirst({
+        where: { userId, examWindowId: inscription.examWindow.id },
+        select: { id: true }
+      });
+      const minutosExtra = await getMinutosExtra(prisma, inscription.examWindow.id, intento?.id);
+      const endDate = finConExtension(inscription.examWindow, minutosExtra);
 
       if (inscription.examWindow.estado !== 'en_curso' || now < startDate || now > endDate) {
         return {
@@ -606,6 +613,36 @@ export async function getExamById(
  * Marca un examen como eliminado (soft-delete). Nunca borra la fila realmente,
  * para preservar el historial de intentos/ventanas ya existentes.
  */
+/**
+ * Examen completo para la vista previa dentro de SEB (al probar la
+ * configuración): todas las partes, pero como las vería un alumno, sin
+ * respuestas correctas, solución de referencia ni detalle de los test cases.
+ */
+export async function getExamForSEBPreview(prisma: PrismaClient, examId: number, profesorId: number) {
+  const exam = await prisma.exam.findUnique({
+    where: { id: examId },
+    include: { partes: { include: { preguntas: { orderBy: { orden: 'asc' } } }, orderBy: { orden: 'asc' } } },
+  });
+
+  if (!exam) {
+    return { error: { status: 404, error: "Examen no encontrado" } as ExamValidationError };
+  }
+  if (exam.profesorId !== profesorId) {
+    return { error: { status: 403, error: "No tienes permiso para ver este examen" } as ExamValidationError };
+  }
+
+  const partes = exam.partes.map(({ solucionReferencia, testCases, preguntas, ...parte }) => ({
+    ...parte,
+    testCases: Array.isArray(testCases) ? testCases.map((tc: any) => ({ description: tc.description || 'Test case' })) : [],
+    preguntas: preguntas.map(({ correcta, correctas, ...pregunta }) =>
+      // En matching y fill_in_blank 'correcta' es una cantidad que el alumno necesita
+      (pregunta.tipo === 'matching' || pregunta.tipo === 'fill_in_blank') ? { ...pregunta, correcta } : pregunta
+    ),
+  }));
+
+  return { exam: { id: exam.id, titulo: exam.titulo, partes } };
+}
+
 export async function deleteExam(
   prisma: PrismaClient,
   examId: number,

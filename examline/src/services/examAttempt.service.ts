@@ -1,6 +1,7 @@
 import { Prisma, type PrismaClient } from "@prisma/client";
 import { loadExamDatasets } from "./exam.service.ts";
 import { isWindowOpenForAttempts } from "./examWindow.service.ts";
+import { getMinutosExtra } from "./examTimeExtension.service.ts";
 
 /**
  * Resultado de validar disponibilidad de una inscripción/ventana para iniciar un intento.
@@ -37,8 +38,17 @@ export async function validateAttemptStart(
     return { status: 403, error: "Esta ventana de examen ha sido desactivada por el profesor" };
   }
 
-  // Verificar disponibilidad del examen (horario, o cierre manual del profesor)
-  if (!isWindowOpenForAttempts(inscription.examWindow)) {
+  // Verificar disponibilidad del examen (horario más el tiempo extra que tenga
+  // el alumno si ya había empezado, o cierre manual del profesor)
+  let minutosExtra = 0;
+  if (!inscription.examWindow.sinTiempo) {
+    const intento = await prisma.examAttempt.findFirst({
+      where: { userId, examWindowId },
+      select: { id: true }
+    });
+    minutosExtra = await getMinutosExtra(prisma, examWindowId, intento?.id);
+  }
+  if (!isWindowOpenForAttempts(inscription.examWindow, minutosExtra)) {
     return { status: 403, error: "El examen no está disponible" };
   }
 
@@ -536,8 +546,11 @@ async function loadAttemptForPartTransition(
     return { error: { status: 403, error: "No autorizado" } as PartAdvanceError };
   }
 
-  if (attempt.examWindow && !isWindowOpenForAttempts(attempt.examWindow)) {
-    return { error: { status: 403, error: "El examen no está disponible en este momento" } as PartAdvanceError };
+  if (attempt.examWindow) {
+    const minutosExtra = attempt.examWindow.sinTiempo ? 0 : await getMinutosExtra(prisma, attempt.examWindow.id, attempt.id);
+    if (!isWindowOpenForAttempts(attempt.examWindow, minutosExtra)) {
+      return { error: { status: 403, error: "El examen no está disponible en este momento" } as PartAdvanceError };
+    }
   }
 
   return { attempt };
@@ -822,13 +835,16 @@ export async function getAttemptStatus(
 
   const nextIndex = attempt.currentPartIndex + 1;
   const hayParteSiguiente = nextIndex < attempt.exam._count.partes;
+  const minutosExtra = attempt.examWindow && !attempt.examWindow.sinTiempo
+    ? await getMinutosExtra(prisma, attempt.examWindow.id, attempt.id)
+    : 0;
 
   return {
     status: {
       estado: attempt.estado,
       partStatus: attempt.partStatus,
       currentPartIndex: attempt.currentPartIndex,
-      examenCerrado: attempt.examWindow ? !isWindowOpenForAttempts(attempt.examWindow) : false,
+      examenCerrado: attempt.examWindow ? !isWindowOpenForAttempts(attempt.examWindow, minutosExtra) : false,
       siguienteParteHabilitada: hayParteSiguiente && (!attempt.examWindow || isNextPartUnlocked(attempt.examWindow, attempt, nextIndex)),
       modoAvanceParte: attempt.examWindow?.modoAvanceParte ?? 'libre'
     }

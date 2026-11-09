@@ -21,6 +21,7 @@ model User {
   inscripciones Inscription[]
   examFiles     ExamFile[]
   questionBank  QuestionBank[]
+  extensionesOtorgadas ExamTimeExtension[]
 }
 
 model Exam {
@@ -166,6 +167,13 @@ model ExamWindow {
   // Archivos
   sebAllowDownloads       Boolean @default(true)
   sebAllowUploads         Boolean @default(false)
+
+  // Aplicaciones permitidas y modo de pruebas
+  sebUnsafeMode           Boolean @default(false) // Desactiva todas las restricciones (solo para probar la configuración)
+  sebEnableTaskManager    Boolean @default(false)
+  sebAllowZoom            Boolean @default(false)
+  sebAllowTeams           Boolean @default(false)
+  sebBrowserWindowAllowMinimize Boolean @default(false)
   
   // URLs
   sebQuitUrl              String  @default("https://ferocarcineto.com.ar/")
@@ -181,6 +189,7 @@ model ExamWindow {
   lastMoodleSync DateTime?    // Última vez que se sincronizó con Moodle
   exam          Exam          @relation(fields: [examId], references: [id])
   inscripciones Inscription[]
+  extensionesTiempo ExamTimeExtension[]
 }
 
 model Inscription {
@@ -219,6 +228,7 @@ model ExamAttempt {
   exam         Exam        @relation(fields: [examId], references: [id])
   user         User        @relation(fields: [userId], references: [id])
   respuestas   RespuestaEstudiante[] // Respuestas del estudiante a cada pregunta
+  extensionesTiempo ExamTimeExtension[]
 
   @@unique([userId, examId, examWindowId])
 }
@@ -277,4 +287,23 @@ model QuestionBank {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   profesor  User     @relation(fields: [profesorId], references: [id])
+}
+
+// Minutos extra que el profesor otorga en una ventana con tiempo: a todos los alumnos
+// (attemptId = null) o a un intento puntual. Queda como historial de quién dio cuánto y por qué.
+model ExamTimeExtension {
+  id           Int          @id @default(autoincrement())
+  examWindowId Int
+  attemptId    Int?         // null = aplica a todos los alumnos de la ventana
+  minutos      Int
+  motivo       String?      // Ej: "Corte de luz", "Llegó tarde por el colectivo"
+  otorgadoPor  Int          // profesor que otorgó el tiempo
+  createdAt    DateTime     @default(now())
+
+  examWindow   ExamWindow   @relation(fields: [examWindowId], references: [id], onDelete: Cascade)
+  attempt      ExamAttempt? @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  profesor     User         @relation(fields: [otorgadoPor], references: [id])
+
+  @@index([examWindowId])
+  @@index([attemptId])
 }
