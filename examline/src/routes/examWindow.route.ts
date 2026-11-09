@@ -14,6 +14,7 @@ import {
   getStudentsWaitingNextPart,
   enableNextPartForStudents,
 } from "../services/examAttempt.service.ts";
+import { getTiempoDeVentana, otorgarExtension } from "../services/examTimeExtension.service.ts";
 
 const MODOS_AVANCE_PARTE = ['libre', 'manual', 'codigo'];
 
@@ -822,6 +823,66 @@ router.get('/disponibles', authenticateToken, requireRole(['student']), async (r
       res.json({ success: true, habilitados });
     } catch (error) {
       console.error('Error habilitando alumnos:', error);
+      res.status(500).json({ error: 'Error interno del servidor' });
+    }
+  });
+
+  // GET /exam-windows/:id/tiempo - Fin del examen, alumnos rindiendo con su propio fin
+  // e historial de extensiones de tiempo (solo ventanas con horario)
+  router.get('/:id/tiempo', authenticateToken, requireRole(['professor']), async (req, res) => {
+    const windowId = parseInt(req.params.id);
+
+    if (isNaN(windowId)) {
+      return res.status(400).json({ error: "ID de ventana inválido" });
+    }
+
+    try {
+      const existingWindow = await prisma.examWindow.findFirst({
+        where: { id: windowId, exam: { profesorId: req.user!.userId } }
+      });
+
+      if (!existingWindow) {
+        return res.status(404).json({ error: 'Ventana no encontrada o no tienes permisos' });
+      }
+
+      const tiempo = await getTiempoDeVentana(prisma, windowId);
+      if (!tiempo) {
+        return res.status(400).json({ error: 'La ventana no tiene horario' });
+      }
+
+      res.json(tiempo);
+    } catch (error) {
+      console.error('Error obteniendo tiempo de la ventana:', error);
+      res.status(500).json({ error: 'Error interno del servidor' });
+    }
+  });
+
+  // POST /exam-windows/:id/extender-tiempo - Da minutos extra a todos los alumnos
+  // de la ventana, o a uno solo si se manda attemptId
+  router.post('/:id/extender-tiempo', authenticateToken, requireRole(['professor']), async (req, res) => {
+    const windowId = parseInt(req.params.id);
+    const { minutos, motivo, attemptId } = req.body;
+
+    if (isNaN(windowId)) {
+      return res.status(400).json({ error: "ID de ventana inválido" });
+    }
+
+    try {
+      const result = await otorgarExtension(prisma, {
+        examWindowId: windowId,
+        profesorId: req.user!.userId,
+        minutos: Number(minutos),
+        motivo: typeof motivo === 'string' ? motivo : undefined,
+        attemptId: attemptId != null ? Number(attemptId) : null
+      });
+
+      if (result.error) {
+        return res.status(result.error.status).json({ error: result.error.error });
+      }
+
+      res.status(201).json({ success: true, extension: result.extension });
+    } catch (error) {
+      console.error('Error extendiendo tiempo:', error);
       res.status(500).json({ error: 'Error interno del servidor' });
     }
   });

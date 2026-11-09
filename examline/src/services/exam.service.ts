@@ -2,6 +2,7 @@ import { type PrismaClient } from "@prisma/client";
 import { readFile } from "fs/promises";
 import path from "path";
 import CodeExecutionService from "./codeExecution.service.ts";
+import { finConExtension, getMinutosExtra } from "./examTimeExtension.service.ts";
 
 /**
  * Descarga todos los archivos de dataset asociados a un examen (si tiene),
@@ -505,10 +506,16 @@ export async function getExamById(
         };
       }
     } else {
-      // Para ventanas con tiempo, verificar estado y tiempo
+      // Para ventanas con tiempo, verificar estado y tiempo (más el tiempo extra
+      // que el profesor le haya dado a este alumno o a todos)
       const now = new Date();
       const startDate = new Date(inscription.examWindow.fechaInicio!);
-      const endDate = new Date(startDate.getTime() + (inscription.examWindow.duracion! * 60 * 1000));
+      const intento = await prisma.examAttempt.findFirst({
+        where: { userId, examWindowId: inscription.examWindow.id },
+        select: { id: true }
+      });
+      const minutosExtra = await getMinutosExtra(prisma, inscription.examWindow.id, intento?.id);
+      const endDate = finConExtension(inscription.examWindow, minutosExtra);
 
       if (inscription.examWindow.estado !== 'en_curso' || now < startDate || now > endDate) {
         return {
