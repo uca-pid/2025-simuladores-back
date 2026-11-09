@@ -31,6 +31,27 @@ interface ValidationResult {
   errors: string[];
 }
 
+/** Resultado crudo de correr un proceso del alumno (antes de armar el ExecutionResult). */
+interface ProcessRun {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+  isTimeout: boolean;
+  salidaExcedida: boolean;
+  spawnError: string | null;
+}
+
+// Límites para el código de los alumnos, que corre en este mismo servidor.
+// Tope de salida por stream: un print en bucle infinito no puede llenar la memoria del back.
+const MAX_SALIDA_BYTES = 1024 * 1024;
+// Memoria máxima del programa del alumno (Python y C vía ulimit en Linux, Node vía --max-old-space-size).
+const LIMITE_MEMORIA_MB = 256;
+// Tamaño máximo de archivo que puede escribir, en KB.
+const LIMITE_ARCHIVO_KB = 10 * 1024;
+// En Linux cada ejecución corre en su propio grupo de procesos, para poder matar
+// también los procesos hijos que lance el alumno. En Windows (desarrollo) no aplica.
+const ES_LINUX = process.platform !== 'win32';
+
 /**
  * Servicio para ejecutar código de forma segura
  * 
@@ -57,13 +78,7 @@ class CodeExecutionService {
   }
 
   /**
-   * Ejecuta código Python o JavaScript
-   * 
-   * TODO: Migrar a Docker para mayor seguridad
-   * Cuando se migre a Docker:
-   * - Reemplazar execAsync con docker run
-   * - Montar volumen con el archivo de código
-   * - Usar imágenes de Python/Node.js oficiales
+   * Ejecuta código Python, JavaScript o C con los límites de ejecutarProceso.
    */
   async executeCode(
     code: string,
@@ -95,104 +110,23 @@ class CodeExecutionService {
   }
 
   /**
-   * Ejecuta código Python 3.11
-   * 
-   * Versión actual: Ejecución directa con python3
-   * Versión futura (Docker):
-   * docker run --rm -v ${tempFile}:/code.py -m ${maxMemory} python:3.11-alpine python /code.py
+   * Ejecuta código Python (python del sistema), con los límites de ejecutarProceso.
    */
   private async executePython(code: string, timeout: number, input: string = '', datasets?: DatasetFile[]): Promise<ExecutionResult> {
     const startTime = Date.now();
     const { dir, codeFile } = await this.createExecutionDir(code, '.py', datasets);
 
-    return new Promise((resolve) => {
-      let stdout = '';
-      let stderr = '';
-      let isTimeout = false;
-
-      // Usar spawn para mejor manejo de stdin. cwd = dir de ejecucion: asi
-      // open("archivo.csv") (ruta relativa) encuentra el dataset dejado al lado del codigo.
-      const pythonProcess = spawn('python', [codeFile], {
-        windowsHide: true,
-        cwd: dir,
-        env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
-      });
-
-      // Configurar timeout
-      const timeoutId = setTimeout(() => {
-        isTimeout = true;
-        pythonProcess.kill('SIGTERM');
-      }, timeout);
-
-      // Capturar stdout
-      pythonProcess.stdout.on('data', (data) => {
-        stdout += data.toString();
-      });
-
-      // Capturar stderr
-      pythonProcess.stderr.on('data', (data) => {
-        stderr += data.toString();
-      });
-
-      // Enviar input si existe
-      if (input) {
-        // Asegurar que el input termine con nueva línea para que input() funcione correctamente
-        const inputWithNewline = input.endsWith('\n') ? input : input + '\n';
-        pythonProcess.stdin.write(inputWithNewline);
-        pythonProcess.stdin.end();
-      } else {
-        pythonProcess.stdin.end();
-      }
-
-      // Manejar finalización
-      pythonProcess.on('close', async (code) => {
-        clearTimeout(timeoutId);
-        const executionTime = Date.now() - startTime;
-
-        // Limpiar archivo temporal
-        await this.cleanupExecutionDir(dir);
-
-        if (isTimeout) {
-          resolve({
-            output: stdout || '',
-            error: `Tiempo de ejecución excedido (máximo ${timeout}ms)`,
-            exitCode: 124,
-            executionTime
-          });
-        } else {
-          resolve({
-            output: stdout || '',
-            error: stderr || null,
-            exitCode: code || 0,
-            executionTime
-          });
-        }
-      });
-
-      // Manejar errores del proceso
-      pythonProcess.on('error', async (error) => {
-        clearTimeout(timeoutId);
-        const executionTime = Date.now() - startTime;
-        
-        // Limpiar archivo temporal
-        await this.cleanupExecutionDir(dir);
-
-        resolve({
-          output: '',
-          error: error.message,
-          exitCode: 1,
-          executionTime
-        });
-      });
-    });
+    try {
+      // cwd = dir de ejecución: así open("archivo.csv") (ruta relativa) encuentra el dataset
+      const run = await this.ejecutarProceso('python', [codeFile], { cwd: dir, input, timeout, limitarMemoria: true });
+      return this.armarResultado(run, startTime, timeout);
+    } finally {
+      await this.cleanupExecutionDir(dir);
+    }
   }
 
   /**
-   * Ejecuta código JavaScript con Node.js
-   * 
-   * Versión actual: Ejecución directa con node
-   * Versión futura (Docker):
-   * docker run --rm -v ${tempFile}:/code.js -m ${maxMemory} node:18-alpine node /code.js
+   * Ejecuta código JavaScript con Node.js, con los límites de ejecutarProceso.
    */
   private async executeJavaScript(code: string, timeout: number, input: string = '', datasets?: DatasetFile[]): Promise<ExecutionResult> {
     const startTime = Date.now();
@@ -201,85 +135,18 @@ class CodeExecutionService {
     const codeWithPromptPolyfill = this.injectPromptPolyfill(code);
     const { dir, codeFile } = await this.createExecutionDir(codeWithPromptPolyfill, '.js', datasets);
 
-    return new Promise((resolve) => {
-      let stdout = '';
-      let stderr = '';
-      let isTimeout = false;
-
-      // Usar spawn para mejor manejo de stdin. cwd = dir de ejecucion: asi
-      // fs.readFileSync("archivo.csv") (ruta relativa) encuentra el dataset dejado al lado del codigo.
-      const nodeProcess = spawn('node', [codeFile], {
-        windowsHide: true,
-        cwd: dir,
-      });
-
-      // Configurar timeout
-      const timeoutId = setTimeout(() => {
-        isTimeout = true;
-        nodeProcess.kill('SIGTERM');
-      }, timeout);
-
-      // Capturar stdout
-      nodeProcess.stdout.on('data', (data) => {
-        stdout += data.toString();
-      });
-
-      // Capturar stderr
-      nodeProcess.stderr.on('data', (data) => {
-        stderr += data.toString();
-      });
-
-      // Enviar input si existe
-      if (input) {
-        // Asegurar que el input termine con nueva línea
-        const inputWithNewline = input.endsWith('\n') ? input : input + '\n';
-        nodeProcess.stdin.write(inputWithNewline);
-        nodeProcess.stdin.end();
-      } else {
-        nodeProcess.stdin.end();
-      }
-
-      // Manejar finalización
-      nodeProcess.on('close', async (code) => {
-        clearTimeout(timeoutId);
-        const executionTime = Date.now() - startTime;
-
-        // Limpiar archivo temporal
-        await this.cleanupExecutionDir(dir);
-
-        if (isTimeout) {
-          resolve({
-            output: stdout || '',
-            error: `Tiempo de ejecución excedido (máximo ${timeout}ms)`,
-            exitCode: 124,
-            executionTime
-          });
-        } else {
-          resolve({
-            output: stdout || '',
-            error: stderr || null,
-            exitCode: code || 0,
-            executionTime
-          });
-        }
-      });
-
-      // Manejar errores del proceso
-      nodeProcess.on('error', async (error) => {
-        clearTimeout(timeoutId);
-        const executionTime = Date.now() - startTime;
-        
-        // Limpiar archivo temporal
-        await this.cleanupExecutionDir(dir);
-
-        resolve({
-          output: '',
-          error: error.message,
-          exitCode: 1,
-          executionTime
-        });
-      });
-    });
+    try {
+      // Node reserva mucha memoria virtual al arrancar, así que su límite va por
+      // --max-old-space-size en vez de ulimit -v.
+      const run = await this.ejecutarProceso(
+        'node',
+        [`--max-old-space-size=${LIMITE_MEMORIA_MB}`, codeFile],
+        { cwd: dir, input, timeout, limitarMemoria: false }
+      );
+      return this.armarResultado(run, startTime, timeout);
+    } finally {
+      await this.cleanupExecutionDir(dir);
+    }
   }
 
   /**
@@ -296,84 +163,22 @@ class CodeExecutionService {
     const { dir, codeFile } = await this.createExecutionDir(code, '.c', datasets);
     const binaryFile = path.join(dir, process.platform === 'win32' ? 'code.exe' : 'code.out');
 
-    const compileResult = await this.compileC(codeFile, binaryFile, dir, timeout);
-    if (!compileResult.success) {
-      await this.cleanupExecutionDir(dir);
-      const executionTime = Date.now() - startTime;
-      return {
-        output: '',
-        error: compileResult.error,
-        exitCode: 1,
-        executionTime
-      };
-    }
-
-    return new Promise((resolve) => {
-      let stdout = '';
-      let stderr = '';
-      let isTimeout = false;
-
-      const runProcess = spawn(binaryFile, [], {
-        windowsHide: true,
-        cwd: dir,
-      });
-
-      const timeoutId = setTimeout(() => {
-        isTimeout = true;
-        runProcess.kill('SIGTERM');
-      }, timeout);
-
-      runProcess.stdout.on('data', (data) => {
-        stdout += data.toString();
-      });
-
-      runProcess.stderr.on('data', (data) => {
-        stderr += data.toString();
-      });
-
-      if (input) {
-        const inputWithNewline = input.endsWith('\n') ? input : input + '\n';
-        runProcess.stdin.write(inputWithNewline);
-        runProcess.stdin.end();
-      } else {
-        runProcess.stdin.end();
+    try {
+      const compileResult = await this.compileC(codeFile, binaryFile, dir, timeout);
+      if (!compileResult.success) {
+        return {
+          output: '',
+          error: compileResult.error,
+          exitCode: 1,
+          executionTime: Date.now() - startTime
+        };
       }
 
-      runProcess.on('close', async (exitCode) => {
-        clearTimeout(timeoutId);
-        const executionTime = Date.now() - startTime;
-        await this.cleanupExecutionDir(dir);
-
-        if (isTimeout) {
-          resolve({
-            output: stdout || '',
-            error: `Tiempo de ejecución excedido (máximo ${timeout}ms)`,
-            exitCode: 124,
-            executionTime
-          });
-        } else {
-          resolve({
-            output: stdout || '',
-            error: stderr || null,
-            exitCode: exitCode || 0,
-            executionTime
-          });
-        }
-      });
-
-      runProcess.on('error', async (error) => {
-        clearTimeout(timeoutId);
-        const executionTime = Date.now() - startTime;
-        await this.cleanupExecutionDir(dir);
-
-        resolve({
-          output: '',
-          error: error.message,
-          exitCode: 1,
-          executionTime
-        });
-      });
-    });
+      const run = await this.ejecutarProceso(binaryFile, [], { cwd: dir, input, timeout, limitarMemoria: true });
+      return this.armarResultado(run, startTime, timeout);
+    } finally {
+      await this.cleanupExecutionDir(dir);
+    }
   }
 
   /**
@@ -386,40 +191,159 @@ class CodeExecutionService {
     dir: string,
     compileTimeout: number
   ): Promise<{ success: boolean; error: string | null }> {
-    return new Promise((resolve) => {
-      let stderr = '';
-      let isTimeout = false;
+    const run = await this.ejecutarProceso('gcc', [codeFile, '-o', binaryFile, '-lm'], {
+      cwd: dir,
+      timeout: compileTimeout,
+      limitarMemoria: false
+    });
 
-      const gccProcess = spawn('gcc', [codeFile, '-o', binaryFile, '-lm'], {
+    if (run.spawnError) {
+      return { success: false, error: `No se pudo compilar: ${run.spawnError}` };
+    }
+    if (run.isTimeout) {
+      return { success: false, error: `Tiempo de compilación excedido (máximo ${compileTimeout}ms)` };
+    }
+    if (run.exitCode !== 0) {
+      return { success: false, error: run.stderr || 'Error de compilación' };
+    }
+    return { success: true, error: null };
+  }
+
+  /**
+   * Variables de entorno para el código del alumno: solo lo necesario para que
+   * el intérprete o el binario funcionen. Nunca las del servidor (base de datos,
+   * JWT, Cloudinary...), que el alumno podría leer con os.environ o process.env.
+   */
+  private entornoDelAlumno(dir: string): NodeJS.ProcessEnv {
+    const env: NodeJS.ProcessEnv = {
+      PATH: process.env.PATH,
+      HOME: dir,
+      TMPDIR: dir,
+      TEMP: dir,
+      TMP: dir,
+      LANG: 'C.UTF-8',
+      PYTHONIOENCODING: 'utf-8',
+      PYTHONDONTWRITEBYTECODE: '1'
+    };
+
+    // En Windows (solo desarrollo) Python y gcc necesitan estas variables del sistema
+    if (!ES_LINUX) {
+      for (const clave of ['SystemRoot', 'windir', 'PATHEXT', 'ComSpec']) {
+        if (process.env[clave]) env[clave] = process.env[clave];
+      }
+    }
+
+    return env;
+  }
+
+  /**
+   * Corre un proceso del alumno (o gcc) con los límites de seguridad:
+   * entorno sin variables del servidor, tope de salida, corte forzado
+   * (SIGKILL, incluidos sus procesos hijos en Linux) al vencer el tiempo,
+   * y límite de memoria y de tamaño de archivo cuando corresponde.
+   */
+  private ejecutarProceso(
+    comando: string,
+    args: string[],
+    opciones: { cwd: string; input?: string; timeout: number; limitarMemoria: boolean }
+  ): Promise<ProcessRun> {
+    const { cwd, input = '', timeout, limitarMemoria } = opciones;
+
+    // En Linux, ulimit dentro de un sh que después hace exec del programa: los
+    // límites quedan aplicados solo a ese proceso y sus hijos.
+    let ejecutable = comando;
+    let argumentos = args;
+    if (ES_LINUX && limitarMemoria) {
+      ejecutable = 'sh';
+      argumentos = [
+        '-c',
+        `ulimit -v ${LIMITE_MEMORIA_MB * 1024}; ulimit -f ${LIMITE_ARCHIVO_KB * 2}; exec "$0" "$@"`,
+        comando,
+        ...args
+      ];
+    }
+
+    return new Promise((resolve) => {
+      let stdout = '';
+      let stderr = '';
+      let bytesSalida = 0;
+      let isTimeout = false;
+      let salidaExcedida = false;
+      let terminado = false;
+
+      const proceso = spawn(ejecutable, argumentos, {
         windowsHide: true,
-        cwd: dir,
+        cwd,
+        env: this.entornoDelAlumno(cwd),
+        detached: ES_LINUX
       });
+
+      const matar = () => {
+        try {
+          if (ES_LINUX && proceso.pid) {
+            process.kill(-proceso.pid, 'SIGKILL');
+          } else {
+            proceso.kill('SIGKILL');
+          }
+        } catch {
+          // El proceso ya había terminado
+        }
+      };
 
       const timeoutId = setTimeout(() => {
         isTimeout = true;
-        gccProcess.kill('SIGTERM');
-      }, compileTimeout);
+        matar();
+      }, timeout);
 
-      gccProcess.stderr.on('data', (data) => {
-        stderr += data.toString();
-      });
-
-      gccProcess.on('close', (code) => {
-        clearTimeout(timeoutId);
-        if (isTimeout) {
-          resolve({ success: false, error: `Tiempo de compilación excedido (máximo ${compileTimeout}ms)` });
-        } else if (code !== 0) {
-          resolve({ success: false, error: stderr || 'Error de compilación' });
-        } else {
-          resolve({ success: true, error: null });
+      const capturar = (stream: 'stdout' | 'stderr') => (data: Buffer) => {
+        if (salidaExcedida) return;
+        bytesSalida += data.length;
+        if (bytesSalida > MAX_SALIDA_BYTES) {
+          salidaExcedida = true;
+          matar();
+          return;
         }
-      });
+        if (stream === 'stdout') stdout += data.toString();
+        else stderr += data.toString();
+      };
 
-      gccProcess.on('error', (error) => {
+      proceso.stdout.on('data', capturar('stdout'));
+      proceso.stderr.on('data', capturar('stderr'));
+
+      // Si el programa termina sin leer stdin, escribirle da EPIPE: no es un error del alumno
+      proceso.stdin.on('error', () => {});
+      if (input) {
+        // Asegurar que el input termine con nueva línea para que input()/scanf funcionen
+        proceso.stdin.write(input.endsWith('\n') ? input : input + '\n');
+      }
+      proceso.stdin.end();
+
+      const finalizar = (exitCode: number, spawnError: string | null) => {
+        if (terminado) return;
+        terminado = true;
         clearTimeout(timeoutId);
-        resolve({ success: false, error: `No se pudo compilar: ${error.message}` });
-      });
+        resolve({ stdout, stderr, exitCode, isTimeout, salidaExcedida, spawnError });
+      };
+
+      proceso.on('close', (code) => finalizar(code ?? 1, null));
+      proceso.on('error', (error) => finalizar(1, error.message));
     });
+  }
+
+  /** Arma el ExecutionResult que devuelve el servicio a partir de la corrida. */
+  private armarResultado(run: ProcessRun, startTime: number, timeout: number): ExecutionResult {
+    const executionTime = Date.now() - startTime;
+
+    if (run.spawnError) {
+      return { output: '', error: run.spawnError, exitCode: 1, executionTime };
+    }
+    if (run.isTimeout) {
+      return { output: run.stdout, error: `Tiempo de ejecución excedido (máximo ${timeout}ms)`, exitCode: 124, executionTime };
+    }
+    if (run.salidaExcedida) {
+      return { output: run.stdout, error: `La salida superó el máximo permitido (${MAX_SALIDA_BYTES / 1024 / 1024} MB)`, exitCode: 1, executionTime };
+    }
+    return { output: run.stdout, error: run.stderr || null, exitCode: run.exitCode, executionTime };
   }
 
   /**
@@ -640,8 +564,9 @@ rl.on('close', () => {
     await writeFile(codeFile, code, 'utf-8');
 
     if (datasets && datasets.length > 0) {
+      // basename: un nombre como "../../x" no puede escribir fuera del directorio de ejecución
       await Promise.all(datasets.map(dataset =>
-        writeFile(path.join(dir, dataset.name), dataset.content, 'utf-8')
+        writeFile(path.join(dir, path.basename(dataset.name)), dataset.content, 'utf-8')
       ));
     }
 
