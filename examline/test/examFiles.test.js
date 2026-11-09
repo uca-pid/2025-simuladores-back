@@ -140,7 +140,7 @@ describe("ExamFilesRoute", () => {
   describe("Professor reference solution endpoints", () => {
     beforeEach(() => {
       // Cambiar usuario a profesor
-      prismaMock.exam.findUnique.mockResolvedValue({ id: 1, profesorId: 1, tipo: "programming" });
+      prismaMock.exam.findUnique.mockResolvedValue({ id: 1, profesorId: 1, partes: [{ tipo: "programming" }] });
     });
 
     it("GET /:examId/reference-solution should return reference files", async () => {

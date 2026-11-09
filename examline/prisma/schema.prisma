@@ -13,6 +13,8 @@ model User {
   email         String        @unique
   password      String
   rol           String        @default("student")
+  resetToken       String?   @unique
+  resetTokenExpiry DateTime?
   exams         Exam[]
   intentos      ExamAttempt[]
   examHistory   ExamHistory[]
@@ -25,36 +27,71 @@ model Exam {
   id                    Int           @id @default(autoincrement())
   titulo                String
   profesorId            Int
-  tipo                  String        @default("multiple_choice") // "multiple_choice" | "programming"
+  tipo                  String        @default("multiple_choice") // legacy/summary: "multiple_choice" | "programming" (no longer enforced now that exams are split into ExamPart)
   ordenAleatorio        Boolean       @default(false) // si las preguntas deben aparecer en orden aleatorio para cada estudiante
-  lenguajeProgramacion  String?       // "python" | "javascript" (solo para exámenes de programación)
-  intellisenseHabilitado Boolean      @default(false) // solo para exámenes de programación
-  enunciadoProgramacion String?       // enunciado específico para exámenes de programación
-  codigoInicial         String?       // código inicial/template para exámenes de programación
-  testCases             Json?         // casos de prueba para evaluación automática de exámenes de programación
-  solucionReferencia    String?       // solución de referencia del profesor (solo visible para él)
+  eliminado             Boolean       @default(false) // soft-delete: examen oculto de listados pero conservado para intentos existentes
   profesor              User          @relation(fields: [profesorId], references: [id])
   intentos              ExamAttempt[]
   history               ExamHistory[]
   ventanas              ExamWindow[]
-  preguntas             Pregunta[]
+  partes                ExamPart[]
   examFiles             ExamFile[]
+}
+
+model ExamPart {
+  id                    Int      @id @default(autoincrement())
+  examId                Int
+  orden                 Int
+  tipo                  String   // "multiple_choice" | "programming"
+  lenguajeProgramacion  String?       // "python" | "javascript" | "c" (solo para partes de programación)
+  intellisenseHabilitado Boolean @default(false) // solo para partes de programación
+  enunciadoTipo         String   @default("texto") // "texto" | "archivo" (mutuamente excluyentes)
+  enunciadoProgramacion String?       // enunciado en texto (solo si enunciadoTipo = "texto")
+  enunciadoUrl          String?       // ruta al archivo PDF/DOCX de consigna subido (solo si enunciadoTipo = "archivo")
+  enunciadoArchivoNombre String?      // nombre original del archivo subido, para mostrar en la UI
+  datasetCsvUrl         String?       // [legacy] ruta al único CSV de datos de versiones anteriores; usar datasetFiles
+  datasetCsvNombre      String?       // [legacy] nombre original del CSV de versiones anteriores; usar datasetFiles
+  datasetFiles          Json?         // array de { url, nombre } con los archivos de datos subidos (CSV/TXT)
+  codigoInicial         String?       // código inicial/template para partes de programación
+  testCases             Json?         // casos de prueba para evaluación automática de partes de programación
+  solucionReferencia    String?       // solución de referencia del profesor (solo visible para él)
+  // Pool aleatorio balanceado por dificultad (solo partes "multiple_choice"): si los 3 campos son
+  // null, se usan todas las `preguntas` tal cual (comportamiento actual). Si tienen valores, al
+  // iniciar el intento se sortea esa cantidad de cada nivel de dificultad del pool de `preguntas`.
+  cantidadFaciles       Int?
+  cantidadMedias        Int?
+  cantidadDificiles     Int?
+  cantidadPreguntas     Int?     // subconjunto aleatorio sin distribución por dificultad
+  exam                  Exam     @relation(fields: [examId], references: [id])
+  preguntas             Pregunta[]
+
+  @@unique([examId, orden])
 }
 
 model Pregunta {
   id       Int    @id @default(autoincrement())
-  tipo     String @default("multiple_choice") // "multiple_choice" | "true_false" | "fill_in_blank" | "matching"
+  tipo     String @default("multiple_choice") // "multiple_choice" | "multiple_response" | "true_false" | "fill_in_blank" | "matching" | "short_answer" | "numeric" | "essay" | "file_upload"
+  dificultad String @default("media") // "facil" | "media" | "dificil"
   texto    String
-  opciones Json   // Array de opciones. Formato según tipo:
-                  // - multiple_choice/true_false: array simple de strings
+  opciones Json   @default("[]") // Array de opciones. Formato según tipo:
+                  // - multiple_choice/multiple_response/true_false: array simple de strings
                   // - fill_in_blank: [respuestasCorrectas..., distractores...]
                   // - matching: [conceptos..., respuestas...]
-  correcta Int    // Valor según tipo:
+                  // - short_answer: array de respuestas aceptadas (comparación case-insensitive)
+                  // - numeric: [valorCorrecto, tolerancia] (ambos como string numérico)
+                  // - essay/file_upload: no se usa, queda []
+  correcta Int?   // Valor según tipo:
                   // - multiple_choice/true_false: índice de la opción correcta
                   // - fill_in_blank: cantidad de respuestas correctas (divide el array opciones)
                   // - matching: cantidad de conceptos (divide el array opciones)
-  examId   Int
-  exam     Exam   @relation(fields: [examId], references: [id])
+                  // - short_answer/numeric/essay/file_upload/multiple_response: no se usa (null)
+  correctas Json? // Solo multiple_response: array de índices de las opciones correctas (selección múltiple)
+  puntos   Float  @default(1) // Peso/puntaje de esta pregunta dentro de la parte (default 1 = todas equivalen igual, como antes)
+  orden    Int?
+  imagenUrl String?
+  imagenesOpciones Json? // Solo multiple_choice/multiple_response: array paralelo a `opciones` con la URL de imagen de cada opción (o null)
+  partId   Int
+  parte    ExamPart @relation(fields: [partId], references: [id], onDelete: Cascade)
   respuestasEstudiante RespuestaEstudiante[] // Respuestas de estudiantes a esta pregunta
 }
 
@@ -72,6 +109,7 @@ model ExamHistory {
 model ExamWindow {
   id            Int           @id @default(autoincrement())
   examId        Int
+  codigo        String        @unique // código de acceso que el profesor comparte con los alumnos para inscribirse
   nombre        String        // nombre descriptivo de la ventana
   fechaInicio   DateTime?
   duracion      Int?
@@ -83,6 +121,12 @@ model ExamWindow {
   sinTiempo     Boolean       @default(false)
   usaSEB        Boolean       @default(false) // si requiere Safe Exam Browser
   notasPublicadas Boolean     @default(false) // si las notas están visibles para los estudiantes
+  // Avance entre partes: "libre" (el alumno continúa cuando quiere), "manual" (el profesor
+  // habilita la siguiente parte a todos o a alumnos elegidos) o "codigo" (el alumno ingresa
+  // `codigoParte`, que le dicta el profesor).
+  modoAvanceParte String      @default("libre")
+  codigoParte   String?       // código que dicta el profesor para pasar a la siguiente parte (solo modo "codigo")
+  partesHabilitadas Int       @default(1) // cantidad de partes habilitadas para todos por el profesor (solo modo "manual")
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
   intentos      ExamAttempt[]
@@ -167,6 +211,10 @@ model ExamAttempt {
   comentariosCorreccion String? // comentarios del profesor sobre la corrección
   corregidoPor Int?        // ID del profesor que corrigió
   corregidoAt  DateTime?   // fecha de corrección manual
+  currentPartIndex Int     @default(0) // índice (0-based) de la ExamPart en curso, según orden
+  partStatus   String      @default("en_curso") // "en_curso" | "esperando_continuar" | "finalizada"
+  partesHabilitadas Int     @default(1) // partes habilitadas a este alumno por el profesor (además de las habilitadas para toda la ventana)
+  respuestasBorrador Json? // respuestas autoguardadas de la parte en curso, se corrigen si el profesor cierra el examen
   examWindow   ExamWindow? @relation(fields: [examWindowId], references: [id])
   exam         Exam        @relation(fields: [examId], references: [id])
   user         User        @relation(fields: [userId], references: [id])
@@ -179,7 +227,11 @@ model RespuestaEstudiante {
   id         Int         @id @default(autoincrement())
   attemptId  Int
   preguntaId Int
-  valor      Json        // Puede ser un índice (Int) para multiple choice/true_false, o un array para fill_in_blank/matching
+  valor      Json        // Puede ser un índice (Int) para multiple choice/true_false, un array para fill_in_blank/matching,
+                          // un string para short_answer/numeric/essay, o null para file_upload (ver archivoUrl)
+  archivoUrl String?      // URL del archivo subido por el estudiante (solo para preguntas tipo file_upload)
+  puntajeManual Float?    // calificación manual por pregunta (solo essay/file_upload, corregida por el profesor)
+  corregidaManualmente Boolean @default(false) // si ya fue revisada por el profesor (permite distinguir de "sin corregir aún")
   attempt    ExamAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
   pregunta   Pregunta    @relation(fields: [preguntaId], references: [id], onDelete: Cascade)
 
@@ -206,18 +258,22 @@ model ExamFile {
 model QuestionBank {
   id        Int      @id @default(autoincrement())
   profesorId Int
-  tipo      String   @default("multiple_choice") // "multiple_choice" | "true_false" | "fill_in_blank" | "matching"
+  tipo      String   @default("multiple_choice") // "multiple_choice" | "multiple_response" | "true_false" | "fill_in_blank" | "matching" | "short_answer" | "numeric" | "essay" | "file_upload"
+  dificultad String  @default("media") // "facil" | "media" | "dificil"
   titulo    String   @default("Sin título")
   texto     String
-  opciones  Json     // Array de opciones. Formato según tipo:
-                    // - multiple_choice/true_false: array simple de strings
+  opciones  Json     @default("[]") // Array de opciones. Formato según tipo:
+                    // - multiple_choice/multiple_response/true_false: array simple de strings
                     // - fill_in_blank: [respuestasCorrectas..., distractores...]
                     // - matching: [conceptos..., respuestas...]
-  correcta  Int      // Valor según tipo:
-                    // - multiple_choice/true_false: índice de la opción correcta
-                    // - fill_in_blank: cantidad de respuestas correctas (divide el array opciones)
-                    // - matching: cantidad de conceptos (divide el array opciones)
+                    // - short_answer: array de respuestas aceptadas
+                    // - numeric: [valorCorrecto, tolerancia]
+                    // - essay/file_upload: no se usa, queda []
+  correcta  Int?     // Valor según tipo (ver Pregunta); null para short_answer/numeric/essay/file_upload/multiple_response
+  correctas Json?    // Solo multiple_response: array de índices de las opciones correctas
   tags      Json     @default("[]")
+  imagenUrl String?  // Imagen opcional de la pregunta (solo multiple_choice)
+  imagenesOpciones Json? // Imágenes opcionales por opción (ver Pregunta.imagenesOpciones)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   profesor  User     @relation(fields: [profesorId], references: [id])

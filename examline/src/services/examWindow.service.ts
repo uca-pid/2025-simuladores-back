@@ -18,6 +18,61 @@ export function parseLocalDate(dateString: string): Date {
   return new Date(year, month - 1, day, hours, minutes);
 }
 
+const CODIGO_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // sin caracteres ambiguos (0/O, 1/I, etc.)
+
+function randomCodigo(length = 6): string {
+  let codigo = "";
+  for (let i = 0; i < length; i++) {
+    codigo += CODIGO_CHARS[Math.floor(Math.random() * CODIGO_CHARS.length)];
+  }
+  return codigo;
+}
+
+/**
+ * Genera un código de acceso único para una ExamWindow, usado por los
+ * estudiantes para auto-inscribirse sin ver el listado de todas las ventanas.
+ */
+export async function generateUniqueExamWindowCode(prisma: PrismaClient): Promise<string> {
+  let codigo = randomCodigo();
+  let existing = await prisma.examWindow.findUnique({ where: { codigo } });
+
+  while (existing) {
+    codigo = randomCodigo();
+    existing = await prisma.examWindow.findUnique({ where: { codigo } });
+  }
+
+  return codigo;
+}
+
+/**
+ * Indica si una ventana permite rendir en este momento. Las ventanas con tiempo
+ * dependen de estado+horario; las sin tiempo, de estar activas y no cerradas por
+ * el profesor (al cerrarlas pasan a 'finalizada').
+ */
+export function isWindowOpenForAttempts(window: {
+  activa: boolean;
+  sinTiempo: boolean;
+  estado: string;
+  fechaInicio: Date | null;
+  duracion: number | null;
+}): boolean {
+  if (!window.activa || window.estado === 'finalizada') {
+    return false;
+  }
+  if (window.sinTiempo) {
+    return true;
+  }
+  const now = new Date();
+  const startDate = new Date(window.fechaInicio!);
+  const endDate = new Date(startDate.getTime() + (window.duracion! * 60 * 1000));
+  return window.estado === 'en_curso' && now >= startDate && now <= endDate;
+}
+
+/** Código corto que el profesor dicta para que los alumnos pasen a la siguiente parte. */
+export function generateCodigoParte(): string {
+  return randomCodigo(5);
+}
+
 // Convierte string de filtro a Date en hora local
 export function parseFiltroFecha(dateString: string): Date {
   if (!dateString) throw new Error("No se recibió fecha válida");
