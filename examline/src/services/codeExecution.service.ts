@@ -1,4 +1,4 @@
-import { exec, spawn } from 'child_process';
+import { exec, execFile, spawn } from 'child_process';
 import { promisify } from 'util';
 import { writeFile, unlink, mkdir, rm } from 'fs/promises';
 import path from 'path';
@@ -14,7 +14,7 @@ interface DatasetFile {
 
 interface ExecutionOptions {
   timeout?: number; // en milisegundos
-  maxMemory?: string; // ej: '128m'
+  maxMemory?: string; // sin efecto: el límite real es LIMITE_MEMORIA_MB (ver ejecutarProceso y argumentosContenedor)
   input?: string; // Input para stdin del programa
   datasets?: DatasetFile[]; // archivos de datos que se dejan junto al código, accesibles con open() por nombre relativo
 }
@@ -53,6 +53,100 @@ const LIMITE_ARCHIVO_KB = 10 * 1024;
 const ES_LINUX = process.platform !== 'win32';
 
 /**
+ * Dónde corre el código de los alumnos (variable EJECUCION_CODIGO):
+ * - 'local' (por defecto): en este mismo servidor, con los límites de ejecutarProceso.
+ *   Es lo que se usa en Render, que no permite contenedores.
+ * - 'podman' o 'docker': cada ejecución en un contenedor descartable, sin red,
+ *   de solo lectura y sin permisos (ver sandbox/SETUP.md). Requiere un servidor propio.
+ */
+export type ModoEjecucion = 'local' | 'podman' | 'docker';
+
+export function modoEjecucion(): ModoEjecucion {
+  const modo = (process.env.EJECUCION_CODIGO || 'local').trim().toLowerCase();
+  return modo === 'podman' || modo === 'docker' ? modo : 'local';
+}
+
+/** Imágenes que construye sandbox/build.sh. */
+export const IMAGENES_SANDBOX: Record<'python' | 'javascript' | 'c', string> = {
+  python: 'examline-sandbox-python',
+  javascript: 'examline-sandbox-node',
+  c: 'examline-sandbox-c'
+};
+
+// Margen para arrancar el contenedor, que no se le descuenta al tiempo del alumno.
+const ARRANQUE_CONTENEDOR_MS = 3000;
+// En C se compila y corre dentro del mismo contenedor: si gcc falla, el script
+// sale con este código y esta marca antes de los errores de compilación.
+const SALIDA_ERROR_COMPILACION = 97;
+const MARCA_ERROR_COMPILACION = '##ERROR_DE_COMPILACION##';
+
+/**
+ * Argumentos de `podman run` / `docker run` para correr un archivo del alumno.
+ * `dirEjecucion` (código + datasets) se monta de solo lectura en /code.
+ */
+export function argumentosContenedor(
+  lenguaje: 'python' | 'javascript' | 'c',
+  dirEjecucion: string,
+  nombreContenedor: string,
+  archivo: string
+): string[] {
+  const comando: Record<typeof lenguaje, string[]> = {
+    python: ['python', `/code/${archivo}`],
+    javascript: ['node', `--max-old-space-size=${LIMITE_MEMORIA_MB}`, `/code/${archivo}`],
+    c: [
+      'sh', '-c',
+      `gcc /code/${archivo} -o /tmp/code.out -lm 2>/tmp/compilacion.txt || ` +
+      `{ echo "${MARCA_ERROR_COMPILACION}" >&2; cat /tmp/compilacion.txt >&2; exit ${SALIDA_ERROR_COMPILACION}; }; ` +
+      `exec /tmp/code.out`
+    ]
+  };
+
+  return [
+    'run', '--rm', '-i',
+    '--name', nombreContenedor,
+    '--network=none',
+    '--read-only',
+    // /tmp es lo único escribible; en C además tiene que permitir ejecutar el binario compilado
+    `--tmpfs=/tmp:rw,${lenguaje === 'c' ? 'exec,' : ''}size=16m`,
+    '--cap-drop=ALL',
+    '--security-opt=no-new-privileges',
+    `--memory=${LIMITE_MEMORIA_MB}m`,
+    `--memory-swap=${LIMITE_MEMORIA_MB}m`,
+    '--cpus=1',
+    '--pids-limit=64',
+    '-v', `${dirEjecucion}:/code:ro`,
+    '-w', '/code',
+    IMAGENES_SANDBOX[lenguaje],
+    ...comando[lenguaje]
+  ];
+}
+
+/**
+ * Chequeo al arrancar el servidor: si EJECUCION_CODIGO pide contenedores, el
+ * programa tiene que estar instalado y las imágenes construidas. Si no, mejor
+ * no arrancar que fallar recién cuando un alumno ejecuta código en un examen.
+ */
+export async function verificarEjecucionCodigo(): Promise<ModoEjecucion> {
+  const modo = modoEjecucion();
+  if (modo === 'local') return modo;
+
+  await new Promise<void>((resolve, reject) => {
+    execFile(modo, ['image', 'inspect', ...Object.values(IMAGENES_SANDBOX)], { timeout: 20000, windowsHide: true }, (error) => {
+      if (error) {
+        reject(new Error(
+          `EJECUCION_CODIGO=${modo}, pero no se encontró ${modo} o faltan las imágenes ` +
+          `${Object.values(IMAGENES_SANDBOX).join(', ')}. Ver sandbox/SETUP.md (construirlas con sandbox/build.sh).`
+        ));
+      } else {
+        resolve();
+      }
+    });
+  });
+
+  return modo;
+}
+
+/**
  * Servicio para ejecutar código de forma segura
  * 
  * Arquitectura diseñada para migrar fácilmente a Docker:
@@ -86,9 +180,13 @@ class CodeExecutionService {
     options: ExecutionOptions = {}
   ): Promise<ExecutionResult> {
     const startTime = Date.now();
-    const { timeout = 10000, maxMemory = '128m', input = '' } = options;
+    const { timeout = 10000, input = '' } = options;
 
     try {
+      if (modoEjecucion() !== 'local' && ['python', 'javascript', 'c'].includes(language)) {
+        return await this.ejecutarEnContenedor(code, language, timeout, input, options.datasets);
+      }
+
       if (language === 'python') {
         return await this.executePython(code, timeout, input, options.datasets);
       } else if (language === 'javascript') {
@@ -245,9 +343,19 @@ class CodeExecutionService {
   private ejecutarProceso(
     comando: string,
     args: string[],
-    opciones: { cwd: string; input?: string; timeout: number; limitarMemoria: boolean }
+    opciones: {
+      cwd: string;
+      input?: string;
+      timeout: number;
+      limitarMemoria: boolean;
+      // Para podman/docker: el CLI necesita el entorno del servidor (HOME, XDG_RUNTIME_DIR...).
+      // El código del alumno igual no lo ve: corre dentro del contenedor con el entorno de la imagen.
+      entornoDelServidor?: boolean;
+      // Se llama además de matar el proceso (ej. borrar el contenedor, que sigue vivo si solo se mata el CLI)
+      alCortar?: () => void;
+    }
   ): Promise<ProcessRun> {
-    const { cwd, input = '', timeout, limitarMemoria } = opciones;
+    const { cwd, input = '', timeout, limitarMemoria, entornoDelServidor = false, alCortar } = opciones;
 
     // En Linux, ulimit dentro de un sh que después hace exec del programa: los
     // límites quedan aplicados solo a ese proceso y sus hijos.
@@ -274,11 +382,12 @@ class CodeExecutionService {
       const proceso = spawn(ejecutable, argumentos, {
         windowsHide: true,
         cwd,
-        env: this.entornoDelAlumno(cwd),
+        env: entornoDelServidor ? process.env : this.entornoDelAlumno(cwd),
         detached: ES_LINUX
       });
 
       const matar = () => {
+        alCortar?.();
         try {
           if (ES_LINUX && proceso.pid) {
             process.kill(-proceso.pid, 'SIGKILL');
@@ -328,6 +437,60 @@ class CodeExecutionService {
       proceso.on('close', (code) => finalizar(code ?? 1, null));
       proceso.on('error', (error) => finalizar(1, error.message));
     });
+  }
+
+  /**
+   * Corre el código del alumno en un contenedor descartable (podman o docker)
+   * con los límites de argumentosContenedor.
+   */
+  private async ejecutarEnContenedor(
+    code: string,
+    language: 'python' | 'javascript' | 'c',
+    timeout: number,
+    input: string,
+    datasets?: DatasetFile[]
+  ): Promise<ExecutionResult> {
+    const startTime = Date.now();
+    const runtime = modoEjecucion();
+    const extension = { python: '.py', javascript: '.js', c: '.c' }[language];
+    const codigo = language === 'javascript' ? this.injectPromptPolyfill(code) : code;
+    const { dir, codeFile } = await this.createExecutionDir(codigo, extension, datasets);
+    const nombre = `examline-exec-${randomBytes(8).toString('hex')}`;
+    // En C la compilación y la corrida comparten contenedor: cada una con su presupuesto (ver executeC)
+    const presupuesto = (language === 'c' ? timeout * 2 : timeout) + ARRANQUE_CONTENEDOR_MS;
+
+    try {
+      const run = await this.ejecutarProceso(
+        runtime,
+        argumentosContenedor(language, dir, nombre, path.basename(codeFile)),
+        {
+          cwd: dir,
+          input,
+          timeout: presupuesto,
+          limitarMemoria: false,
+          entornoDelServidor: true,
+          alCortar: () => this.borrarContenedor(runtime, nombre)
+        }
+      );
+
+      if (language === 'c' && run.exitCode === SALIDA_ERROR_COMPILACION && run.stderr.startsWith(MARCA_ERROR_COMPILACION)) {
+        return {
+          output: '',
+          error: run.stderr.slice(MARCA_ERROR_COMPILACION.length).trim() || 'Error de compilación',
+          exitCode: 1,
+          executionTime: Date.now() - startTime
+        };
+      }
+
+      return this.armarResultado(run, startTime, timeout);
+    } finally {
+      await this.cleanupExecutionDir(dir);
+    }
+  }
+
+  /** Borra a la fuerza un contenedor que hubo que cortar (por tiempo o por salida). */
+  private borrarContenedor(runtime: ModoEjecucion, nombre: string) {
+    execFile(runtime, ['rm', '-f', nombre], { timeout: 15000, windowsHide: true }, () => {});
   }
 
   /** Arma el ExecutionResult que devuelve el servicio a partir de la corrida. */
@@ -659,63 +822,6 @@ rl.on('close', () => {
       score
     };
   }
-
-  /**
-   * Método futuro para ejecutar código en Docker
-   * Descomentar cuando se implemente Docker
-   */
-  /*
-  private async executeInDocker(
-    code: string,
-    language: 'python' | 'javascript',
-    options: ExecutionOptions
-  ): Promise<ExecutionResult> {
-    const startTime = Date.now();
-    const tempFile = await this.createTempFile(
-      code,
-      language === 'python' ? '.py' : '.js'
-    );
-
-    const image = language === 'python' ? 'python:3.11-alpine' : 'node:18-alpine';
-    const command = language === 'python' ? 'python /code' : 'node /code';
-    
-    const dockerCommand = `docker run --rm \
-      --network none \
-      --memory ${options.maxMemory} \
-      --cpus 0.5 \
-      -v ${tempFile}:/code:ro \
-      ${image} \
-      ${command}`;
-
-    try {
-      const { stdout, stderr } = await execAsync(dockerCommand, {
-        timeout: options.timeout,
-        maxBuffer: 1024 * 1024
-      });
-
-      const executionTime = Date.now() - startTime;
-
-      return {
-        output: stdout || '',
-        error: stderr || null,
-        exitCode: 0,
-        executionTime
-      };
-
-    } catch (error: any) {
-      const executionTime = Date.now() - startTime;
-      return {
-        output: error.stdout || '',
-        error: error.stderr || error.message,
-        exitCode: error.code || 1,
-        executionTime
-      };
-
-    } finally {
-      await this.cleanupTempFile(tempFile);
-    }
-  }
-  */
 }
 
 export default CodeExecutionService;
