@@ -8,6 +8,7 @@ import express, { NextFunction, Request, Response } from 'express';
 import cors from 'cors'; // Importar CORS
 import { createServer } from 'http';
 import addRoutes from './routes'; // Asegúrate de que esta ruta sea correcta
+import { verificarEjecucionCodigo } from './services/codeExecution.service.ts';
 
 // Reintenta automáticamente cualquier query que falle por P1001 ("Can't reach
 // database server"): pasa cuando Neon (plan free) suspendió el compute por
@@ -78,7 +79,17 @@ function errorHandler(err: Error, req: Request, res: Response, next: NextFunctio
 // para que las rutas y los timers de examWindow no arranquen contra una
 // conexión todavía no establecida (cold start de Neon)
 const PORT = process.env.PORT || 4000;
-waitForDatabase().then(() => {
+waitForDatabase().then(async () => {
+  // Si EJECUCION_CODIGO pide contenedores y no están disponibles, no arrancar:
+  // es mejor enterarse ahora que cuando un alumno ejecuta código en un examen
+  try {
+    const modo = await verificarEjecucionCodigo();
+    console.log(`🧪 Ejecución de código de alumnos: ${modo}`);
+  } catch (error: any) {
+    console.error(`❌ ${error.message}`);
+    process.exit(1);
+  }
+
   // Añadir otras rutas desde addRoutes
   addRoutes(app, prisma);
 

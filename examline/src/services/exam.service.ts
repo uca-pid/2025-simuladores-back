@@ -3,6 +3,7 @@ import { readFile } from "fs/promises";
 import path from "path";
 import CodeExecutionService from "./codeExecution.service.ts";
 import { finConExtension, getMinutosExtra } from "./examTimeExtension.service.ts";
+import { mezclarOpcionesParaAlumno } from "../utils/ofuscacionOpciones.ts";
 
 /**
  * Descarga todos los archivos de dataset asociados a un examen (si tiene),
@@ -570,15 +571,17 @@ export async function getExamById(
         return { ...rest, preguntas: [], testCases: undefined };
       }
 
-      // 🔒 SEGURIDAD: NO enviar respuestas correctas ni datos de test cases de la parte actual
+      // 🔒 SEGURIDAD: NO enviar respuestas correctas ni datos de test cases de la parte actual,
+      // y mandar las opciones ya mezcladas para este alumno (ver ofuscacionOpciones.ts)
       const preguntas = Array.isArray(parteSinSolucion.preguntas)
         ? parteSinSolucion.preguntas.map((pregunta: any) => {
+            const { correctas, ...sinCorrectas } = pregunta;
             // Para matching y fill_in_blank, 'correcta' indica cantidad, no la respuesta
             if (pregunta.tipo === 'matching' || pregunta.tipo === 'fill_in_blank') {
-              return pregunta;
+              return mezclarOpcionesParaAlumno(sinCorrectas, userId, examId);
             }
-            const { correcta, ...preguntaSinRespuesta } = pregunta;
-            return preguntaSinRespuesta;
+            const { correcta, ...preguntaSinRespuesta } = sinCorrectas;
+            return mezclarOpcionesParaAlumno(preguntaSinRespuesta, userId, examId);
           })
         : [];
 
