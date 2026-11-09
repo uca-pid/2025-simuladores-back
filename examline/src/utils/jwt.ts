@@ -27,7 +27,11 @@ export const generateToken = (payload: JWTPayload): string => {
 
 export const verifyToken = (token: string): JWTPayload | null => {
   try {
-    const decoded = jwt.verify(token, JWT_SECRET) as JWTPayload;
+    const decoded = jwt.verify(token, JWT_SECRET) as JWTPayload & { scope?: string };
+    // Los tokens de vista previa de SEB solo sirven para ver ese examen, nunca como sesión
+    if (decoded.scope === 'seb-preview') {
+      return null;
+    }
     return decoded;
   } catch (error) {
     // Solo loguear en desarrollo o si es un error diferente a token expirado
@@ -41,4 +45,34 @@ export const verifyToken = (token: string): JWTPayload | null => {
 export const refreshToken = (payload: JWTPayload): string => {
   // Create a new token with the same payload but fresh expiry
   return generateToken(payload);
+};
+
+/**
+ * Token corto (10 minutos) para que el profesor vea un examen dentro de SEB al
+ * probar la configuración: SEB abre su propio navegador, sin la sesión del profe.
+ */
+export const generateSEBPreviewToken = (userId: number, examId: number): string => {
+  return jwt.sign(
+    { scope: 'seb-preview', userId, examId },
+    JWT_SECRET,
+    { expiresIn: '10m', issuer: 'examline-app', audience: 'seb-preview' }
+  );
+};
+
+/** Devuelve el profesor del token de vista previa si es válido para ese examen, o null. */
+export const verifySEBPreviewToken = (token: string, examId: number): number | null => {
+  try {
+    const payload = jwt.verify(token, JWT_SECRET, {
+      issuer: 'examline-app',
+      audience: 'seb-preview'
+    }) as JwtPayload & { scope?: string; userId?: number; examId?: number };
+
+    if (payload.scope !== 'seb-preview' || payload.examId !== examId || !Number.isInteger(payload.userId)) {
+      return null;
+    }
+
+    return payload.userId!;
+  } catch {
+    return null;
+  }
 };

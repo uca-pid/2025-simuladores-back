@@ -3,12 +3,31 @@ import { type PrismaClient } from "@prisma/client"
 import 'dotenv/config';
 import fs from "fs"
 import path from "path"
+import crypto from "crypto"
 import {
   getExamWindowSEBSettings,
   buildSEBXml,
+  sebSettingsDesde,
   type SEBConfigParams,
   type ExamWindowSEBSettings
 } from "../services/sebConfig.service"
+import { authenticateToken, requireOwnership, requireRole } from "../middleware/auth"
+import { generateSEBPreviewToken, verifySEBPreviewToken } from "../utils/jwt"
+import { getExamForSEBPreview } from "../services/exam.service"
+
+// Los .seb de prueba quedan públicos en /examenes con un token de vista previa
+// adentro: se borran pasada una hora para que no se acumulen.
+const VIDA_ARCHIVO_PRUEBA_MS = 60 * 60 * 1000
+
+function borrarPruebasViejas(carpeta: string) {
+  for (const archivo of fs.readdirSync(carpeta)) {
+    if (!archivo.startsWith("prueba_") || !archivo.endsWith(".seb")) continue
+    const ruta = path.join(carpeta, archivo)
+    if (Date.now() - fs.statSync(ruta).mtimeMs > VIDA_ARCHIVO_PRUEBA_MS) {
+      fs.unlinkSync(ruta)
+    }
+  }
+}
 
 const ExamStartRoute = (prisma: PrismaClient) => {
   const router = Router()
@@ -69,6 +88,72 @@ const ExamStartRoute = (prisma: PrismaClient) => {
     const sebUrl = `seb://${backendHost}/examenes/${fileName}`;
     res.json({ sebUrl });
     
+  })
+
+  // POST /exam-start/test-download - .seb de prueba con la configuración del formulario
+  // (aunque no esté guardada) que abre el examen en vista previa dentro de SEB
+  router.post("/test-download", authenticateToken, requireRole(['professor']), requireOwnership(prisma, 'exam'), async (req: Request, res: Response) => {
+    const examId = Number(req.body.examId)
+    const sebSettings = sebSettingsDesde(req.body)
+
+    // El token va en el fragmento (#): el navegador no lo manda al servidor del front
+    const previewToken = generateSEBPreviewToken(req.user!.userId, examId)
+    const fragmento = new URLSearchParams({ previewToken, quitUrl: sebSettings.quitUrl }).toString()
+    const frontUrl = `${FRONTEND_URL1}/exam-preview/${examId}#${fragmento}`
+
+    const params: SEBConfigParams = {
+      examId,
+      windowId: 0,
+      token: "",
+      frontUrl,
+      backendUrl: BACKEND_URL,
+    }
+    const sebPlist = buildSEBXml(params, sebSettings)
+
+    try {
+      const examsFolder = path.join(process.cwd(), "examenes")
+      if (!fs.existsSync(examsFolder)) fs.mkdirSync(examsFolder)
+      borrarPruebasViejas(examsFolder)
+
+      const fileName = `prueba_${crypto.randomUUID()}.seb`
+      fs.writeFileSync(path.join(examsFolder, fileName), sebPlist, "utf8")
+
+      const backendHost = BACKEND_URL.replace(/^https?:\/\//, '')
+      res.json({
+        sebUrl: `seb://${backendHost}/examenes/${fileName}`,
+        archivoUrl: `${BACKEND_URL}/examenes/${fileName}`
+      })
+    } catch (error) {
+      console.error('Error generando .seb de prueba:', error)
+      res.status(500).json({ error: "No se pudo generar el archivo de prueba" })
+    }
+  })
+
+  // GET /exam-start/preview/:examId - Examen para la vista previa dentro de SEB,
+  // autorizado con el token corto de vista previa (no con la sesión del profesor)
+  router.get("/preview/:examId", async (req: Request, res: Response) => {
+    const examId = Number(req.params.examId)
+    const previewToken = req.header('Authorization')?.replace(/^Bearer\s+/i, '')
+
+    if (!Number.isInteger(examId) || examId < 1 || !previewToken) {
+      return res.status(401).json({ error: "Vista previa no autorizada" })
+    }
+
+    const profesorId = verifySEBPreviewToken(previewToken, examId)
+    if (!profesorId) {
+      return res.status(401).json({ error: "La vista previa venció. Generá un archivo de prueba nuevo desde la ventana." })
+    }
+
+    try {
+      const result = await getExamForSEBPreview(prisma, examId, profesorId)
+      if (result.error) {
+        return res.status(result.error.status).json({ error: result.error.error })
+      }
+      res.json(result.exam)
+    } catch (error) {
+      console.error('Error cargando vista previa SEB:', error)
+      res.status(500).json({ error: "No se pudo cargar la vista previa" })
+    }
   })
 
   return router

@@ -107,53 +107,64 @@ export async function getExamWindowSEBSettings(
     return null;
   }
 
-  // Valores por defecto - leer desde la base de datos
- const defaults: ExamWindowSEBSettings = {
-    unsafeMode: (examWindow as any).sebUnsafeMode ?? false,
+  return sebSettingsDesde(examWindow);
+}
+
+/**
+ * Arma la configuración de SEB a partir de los campos seb* de una ventana: la
+ * guardada en la base, o la del formulario sin guardar (al probar la
+ * configuración). Lo que falta toma el valor por defecto.
+ */
+export function sebSettingsDesde(fuente: Record<string, any>): ExamWindowSEBSettings {
+  const bool = (valor: any, porDefecto: boolean) => (valor === undefined || valor === null ? porDefecto : Boolean(valor));
+  const num = (valor: any, porDefecto: number) => (valor === undefined || valor === null || isNaN(Number(valor)) ? porDefecto : Number(valor));
+  const texto = (valor: any, porDefecto: string) => (typeof valor === 'string' && valor.trim() ? valor.trim() : porDefecto);
+  const kioskMode = num(fuente.kioskMode, 0);
+
+  return {
+    unsafeMode: bool(fuente.sebUnsafeMode, false),
     // Modo kiosk
-    kioskMode: (examWindow as any).sebKioskMode ?? (examWindow.kioskMode || 0),
-    showTaskBar: (examWindow as any).sebShowTaskBar ?? examWindow.kioskMode === 1,
-    allowQuit: (examWindow as any).sebAllowQuit ?? true,
-    browserViewMode: (examWindow as any).sebBrowserViewMode ?? (examWindow.kioskMode || 0),
-    allowReload: (examWindow as any).sebAllowReload ?? true,
-    allowAddressBar: (examWindow as any).sebAllowAddressBar ?? false,
-    enableBrowserWindowToolbar: (examWindow as any).sebEnableBrowserWindowToolbar ?? false,
-    allowBrowsingBackForward: (examWindow as any).sebAllowBrowsingBackForward ?? false,
-    
+    kioskMode: num(fuente.sebKioskMode, kioskMode),
+    showTaskBar: bool(fuente.sebShowTaskBar, kioskMode === 1),
+    allowQuit: bool(fuente.sebAllowQuit, true),
+    browserViewMode: num(fuente.sebBrowserViewMode, kioskMode),
+    allowReload: bool(fuente.sebAllowReload, true),
+    allowAddressBar: bool(fuente.sebAllowAddressBar, false),
+    enableBrowserWindowToolbar: bool(fuente.sebEnableBrowserWindowToolbar, false),
+    allowBrowsingBackForward: bool(fuente.sebAllowBrowsingBackForward, false),
+
     // Teclado
-    enableEsc: (examWindow as any).sebEnableEsc ?? false,
-    enableAltTab: (examWindow as any).sebEnableAltTab ?? false,
-    enableAltEsc: (examWindow as any).sebEnableAltEsc ?? false,
-    enableAltF4: (examWindow as any).sebEnableAltF4 ?? false,
-    enableStartMenu: (examWindow as any).sebEnableStartMenu ?? false,
-    enableRightMouse: (examWindow as any).sebEnableRightMouse ?? true,
-    enablePrintScreen: (examWindow as any).sebEnablePrintScreen ?? true,
-    enableFunctionKeys: (examWindow as any).sebEnableFunctionKeys ?? true,
-    
+    enableEsc: bool(fuente.sebEnableEsc, false),
+    enableAltTab: bool(fuente.sebEnableAltTab, false),
+    enableAltEsc: bool(fuente.sebEnableAltEsc, false),
+    enableAltF4: bool(fuente.sebEnableAltF4, false),
+    enableStartMenu: bool(fuente.sebEnableStartMenu, false),
+    enableRightMouse: bool(fuente.sebEnableRightMouse, true),
+    enablePrintScreen: bool(fuente.sebEnablePrintScreen, true),
+    enableFunctionKeys: bool(fuente.sebEnableFunctionKeys, true),
+
     // Seguridad
-    clipboardPolicy: (examWindow as any).sebClipboardPolicy ?? 2,
-    createNewDesktop: (examWindow as any).sebCreateNewDesktop ?? true,
-    lockOnMessageSocketClose: (examWindow as any).sebLockOnMessageSocketClose ?? true,
-    allowSwitchToApplications: (examWindow as any).sebAllowSwitchToApplications ?? false,
-    allowDeveloperConsole: (examWindow as any).sebAllowDeveloperConsole ?? false,
-    
+    clipboardPolicy: num(fuente.sebClipboardPolicy, 2),
+    createNewDesktop: bool(fuente.sebCreateNewDesktop, true),
+    lockOnMessageSocketClose: bool(fuente.sebLockOnMessageSocketClose, true),
+    allowSwitchToApplications: bool(fuente.sebAllowSwitchToApplications, false),
+    allowDeveloperConsole: bool(fuente.sebAllowDeveloperConsole, false),
+
     // Archivos
-    allowDownloads: (examWindow as any).sebAllowDownloads ?? true,
-    allowUploads: (examWindow as any).sebAllowUploads ?? false,
-    
+    allowDownloads: bool(fuente.sebAllowDownloads, true),
+    allowUploads: bool(fuente.sebAllowUploads, false),
+
     // URLs y contraseñas
-    quitUrl: (examWindow as any).sebQuitUrl ?? "https://ferocarcineto.com.ar/",
-    quitPassword: (examWindow as any).sebQuitPassword ?? "12345",
-    settingsPassword: (examWindow as any).sebSettingsPassword ?? "12345",
+    quitUrl: texto(fuente.sebQuitUrl, "https://ferocarcineto.com.ar/"),
+    quitPassword: texto(fuente.sebQuitPassword, "12345"),
+    settingsPassword: texto(fuente.sebSettingsPassword, "12345"),
 
     // Virtual y Ventanas
-    allowZoom: (examWindow as any).sebAllowZoom ?? false,
-    allowTeams: (examWindow as any).sebAllowTeams ?? false,
-    browserWindowAllowMinimize: (examWindow as any).sebBrowserWindowAllowMinimize ?? false,
-    enableTaskManager: (examWindow as any).sebEnableTaskManager ?? false,
+    allowZoom: bool(fuente.sebAllowZoom, false),
+    allowTeams: bool(fuente.sebAllowTeams, false),
+    browserWindowAllowMinimize: bool(fuente.sebBrowserWindowAllowMinimize, false),
+    enableTaskManager: bool(fuente.sebEnableTaskManager, false),
   };
-
-  return defaults;
 }
 
 /**
