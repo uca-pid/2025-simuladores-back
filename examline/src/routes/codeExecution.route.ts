@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { authenticateToken, requireRole } from '../middleware/auth';
 import CodeExecutionService from '../services/codeExecution.service.ts';
+import { loadExamDatasets } from '../services/exam.service.ts';
 
 const CodeExecutionRoute = (prisma: PrismaClient) => {
   const router = Router();
@@ -14,7 +15,7 @@ const CodeExecutionRoute = (prisma: PrismaClient) => {
    */
   router.post('/run', authenticateToken, async (req, res) => {
     try {
-      const { code, language, examId, input } = req.body;
+      const { code, language, examId, partId, input } = req.body;
       const userId = req.user!.userId;
       const userRole = req.user!.rol;
 
@@ -25,13 +26,14 @@ const CodeExecutionRoute = (prisma: PrismaClient) => {
         });
       }
 
-      if (!['python', 'javascript'].includes(language)) {
+      if (!['python', 'javascript', 'c'].includes(language)) {
         return res.status(400).json({
-          error: 'Lenguaje no soportado. Use "python" o "javascript"'
+          error: 'Lenguaje no soportado. Use "python", "javascript" o "c"'
         });
       }
 
       // Validar examen y permisos
+      let datasets;
       if (examId) {
         const exam = await prisma.exam.findUnique({
           where: { id: parseInt(examId) }
@@ -39,12 +41,6 @@ const CodeExecutionRoute = (prisma: PrismaClient) => {
 
         if (!exam) {
           return res.status(404).json({ error: 'Examen no encontrado' });
-        }
-
-        if (exam.tipo !== 'programming') {
-          return res.status(400).json({
-            error: 'Este examen no es de tipo programación'
-          });
         }
 
         // 🔒 Validación de seguridad: verificar que el estudiante esté inscrito
@@ -64,6 +60,21 @@ const CodeExecutionRoute = (prisma: PrismaClient) => {
             return res.status(403).json({ error: 'No estás inscrito en una ventana activa de este examen' });
           }
         }
+
+        // Los datasets viven en cada ExamPart (no en Exam). Si el cliente indica la
+        // parte se usan los de esa parte; si no, los de todas las partes del examen.
+        let parts = await prisma.examPart.findMany({
+          where: {
+            examId: parseInt(examId),
+            ...(partId ? { id: parseInt(partId) } : {})
+          }
+        });
+        if (parts.length === 0 && partId) {
+          // partId inválido o de otro examen: usar las partes del examen
+          parts = await prisma.examPart.findMany({ where: { examId: parseInt(examId) } });
+        }
+        const loaded = await Promise.all(parts.map(p => loadExamDatasets(p)));
+        datasets = loaded.flat();
       }
 
       // Ejecutar código
@@ -74,6 +85,7 @@ const CodeExecutionRoute = (prisma: PrismaClient) => {
           timeout: 10000, // 10 segundos
           maxMemory: '128m',
           input: input || '', // Pasar el input del usuario
+          datasets,
         }
       );
 
@@ -137,7 +149,7 @@ const CodeExecutionRoute = (prisma: PrismaClient) => {
    */
   router.post('/execute', authenticateToken, requireRole(['professor']), async (req, res) => {
     try {
-      const { code, language, filename, testCases, customInput } = req.body;
+      const { code, language, filename, testCases, customInput, examId } = req.body;
 
       // Validaciones
       if (!code || !language) {
@@ -146,10 +158,21 @@ const CodeExecutionRoute = (prisma: PrismaClient) => {
         });
       }
 
-      if (!['python', 'javascript'].includes(language)) {
+      if (!['python', 'javascript', 'c'].includes(language)) {
         return res.status(400).json({
-          error: 'Lenguaje no soportado. Use "python" o "javascript"'
+          error: 'Lenguaje no soportado. Use "python", "javascript" o "c"'
         });
+      }
+
+      // Datasets del examen (viven en cada ExamPart). Solo se cargan si el examen
+      // es del profesor que ejecuta, para no exponer archivos de otros profesores.
+      let datasets: Awaited<ReturnType<typeof loadExamDatasets>> | undefined;
+      if (examId) {
+        const exam = await prisma.exam.findUnique({ where: { id: parseInt(examId) } });
+        if (exam && exam.profesorId === req.user!.userId) {
+          const parts = await prisma.examPart.findMany({ where: { examId: exam.id } });
+          datasets = (await Promise.all(parts.map(p => loadExamDatasets(p)))).flat();
+        }
       }
 
       // Si hay input personalizado, ejecutar con ese input
@@ -161,6 +184,7 @@ const CodeExecutionRoute = (prisma: PrismaClient) => {
             timeout: 10000,
             maxMemory: '128m',
             input: customInput,
+            datasets,
           }
         );
 
@@ -187,10 +211,11 @@ const CodeExecutionRoute = (prisma: PrismaClient) => {
                 timeout: 10000,
                 maxMemory: '128m',
                 input: testCase.input || '',
+                datasets,
               }
             );
 
-            const passed = result.output?.trim() === testCase.expectedOutput?.trim();
+            const passed = result.output?.replace(/\r\n/g, '\n').trim() === testCase.expectedOutput?.replace(/\r\n/g, '\n').trim();
             if (passed) passedTests++;
 
             testResults.push({
@@ -230,6 +255,7 @@ const CodeExecutionRoute = (prisma: PrismaClient) => {
           timeout: 10000,
           maxMemory: '128m',
           input: '',
+          datasets,
         }
       );
 

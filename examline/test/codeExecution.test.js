@@ -127,4 +127,38 @@ describe('CodeExecutionRoute tests', () => {
     expect(res.statusCode).toBe(400);
     expect(res.body.error).toMatch(/no soportado/);
   });
+
+  it('POST /execute should run C code with custom input for professor', async () => {
+    mockExecute.mockResolvedValue({
+      output: '3',
+      error: null,
+      exitCode: 0,
+      executionTime: 20,
+    });
+
+    const res = await request(app)
+      .post('/code-execution/execute')
+      .send({ code: '#include <stdio.h>\nint main(){int a,b;scanf("%d %d",&a,&b);printf("%d",a+b);}', language: 'c', customInput: '1 2' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.output).toBe('3');
+    expect(mockExecute).toHaveBeenCalledWith(expect.any(String), 'c', expect.objectContaining({ input: '1 2' }));
+  });
+
+  it('POST /execute should surface a C compile error instead of a 500', async () => {
+    mockExecute.mockResolvedValue({
+      output: '',
+      error: 'code.c:1:20: error: expected \';\' before \'}\' token',
+      exitCode: 1,
+      executionTime: 5,
+    });
+
+    const res = await request(app)
+      .post('/code-execution/execute')
+      .send({ code: 'int main(){int a }', language: 'c', customInput: '' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error).toMatch(/error/);
+  });
 });

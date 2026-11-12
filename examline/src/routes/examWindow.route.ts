@@ -6,13 +6,79 @@ import {
   parseFiltroFecha,
   updateWindowStatuses,
   startMillisecondSystem,
+  generateUniqueExamWindowCode,
+  generateCodigoParte,
 } from "../services/examWindow.service.ts";
+import {
+  closeExamWindow,
+  getStudentsWaitingNextPart,
+  enableNextPartForStudents,
+} from "../services/examAttempt.service.ts";
+import { getTiempoDeVentana, otorgarExtension } from "../services/examTimeExtension.service.ts";
+
+const MODOS_AVANCE_PARTE = ['libre', 'manual', 'codigo'];
+
+// Campos de configuración de Safe Exam Browser que el profesor edita en la ventana
+const sebBooleanFields = [
+  "sebUnsafeMode",
+  "sebShowTaskBar",
+  "sebAllowAddressBar",
+  "sebEnableBrowserWindowToolbar",
+  "sebAllowQuit",
+  "sebAllowReload",
+  "sebAllowBrowsingBackForward",
+  "sebEnableEsc",
+  "sebEnableAltTab",
+  "sebEnableAltEsc",
+  "sebEnableAltF4",
+  "sebEnableStartMenu",
+  "sebEnableRightMouse",
+  "sebEnablePrintScreen",
+  "sebEnableFunctionKeys",
+  "sebEnableCtrlEsc",
+  "sebEnableTaskManager",
+  "sebCreateNewDesktop",
+  "sebLockOnMessageSocketClose",
+  "sebAllowSwitchToApplications",
+  "sebAllowDeveloperConsole",
+  "sebAllowZoom",
+  "sebAllowTeams",
+  "sebBrowserWindowAllowMinimize",
+  "sebAllowDownloads",
+  "sebAllowUploads",
+] as const;
+
+const sebNumberFields = ["sebKioskMode", "sebBrowserViewMode", "sebClipboardPolicy"] as const;
+const sebStringFields = ["sebQuitUrl", "sebQuitPassword", "sebSettingsPassword"] as const;
+
+/** Toma del body solo los campos de SEB presentes, con su tipo correcto. */
+function getSEBSettings(body: Record<string, any>) {
+  const settings: Record<string, boolean | number | string> = {};
+
+  for (const field of sebBooleanFields) {
+    if (body[field] !== undefined) settings[field] = Boolean(body[field]);
+  }
+
+  for (const field of sebNumberFields) {
+    if (body[field] !== undefined && !isNaN(Number(body[field]))) settings[field] = Number(body[field]);
+  }
+
+  for (const field of sebStringFields) {
+    if (typeof body[field] === 'string' && body[field].trim()) settings[field] = body[field].trim();
+  }
+
+  if (settings.sebKioskMode === undefined && body.kioskMode !== undefined) {
+    settings.sebKioskMode = Number(body.kioskMode);
+  }
+
+  return settings;
+}
 
 const ExamWindowRoute = (prisma: PrismaClient) => {
   const router = Router();
 
   router.post('/', authenticateToken, requireRole(['professor']), async (req, res) => {
-  const { examId, nombre, fechaInicio, duracion, modalidad, cupoMaximo, notas, sinTiempo, usaSEB, kioskMode} = req.body;
+  const { examId, nombre, fechaInicio, duracion, modalidad, cupoMaximo, notas, sinTiempo, usaSEB, kioskMode, modoAvanceParte } = req.body;
 
   try {
         const examIdNumber = parseInt(examId);
@@ -64,6 +130,12 @@ const ExamWindowRoute = (prisma: PrismaClient) => {
             .json({ error: 'Modalidad debe ser "remoto" o "presencial"' });
         }
 
+        if (modoAvanceParte !== undefined && !MODOS_AVANCE_PARTE.includes(modoAvanceParte)) {
+          return res
+            .status(400)
+            .json({ error: 'Modo de avance entre partes inválido' });
+        }
+
         if (cupoMaximoNumber < 1) {
           return res
             .status(400)
@@ -71,8 +143,11 @@ const ExamWindowRoute = (prisma: PrismaClient) => {
         }
 
         // Preparar datos para la creación
+        const codigo = await generateUniqueExamWindowCode(prisma);
+
         const windowData: any = {
           examId: examIdNumber,
+          codigo,
           nombre: nombre || `Ventana ${Date.now()}`,
           modalidad,
           cupoMaximo: cupoMaximoNumber,
@@ -80,6 +155,9 @@ const ExamWindowRoute = (prisma: PrismaClient) => {
           sinTiempo: isSinTiempo,
           usaSEB: Boolean(usaSEB),
           kioskMode: kioskMode,
+          modoAvanceParte: modoAvanceParte || 'libre',
+          ...getSEBSettings(req.body),
+          codigoParte: modoAvanceParte === 'codigo' ? generateCodigoParte() : null,
           estado: isSinTiempo ? 'programada' : 'programada'
         };
 
@@ -122,7 +200,7 @@ const ExamWindowRoute = (prisma: PrismaClient) => {
         },
         include: {
           exam: {
-            select: { id: true, titulo: true }
+            select: { id: true, titulo: true, _count: { select: { partes: true } } }
           },
           inscripciones: {
             include: {
@@ -130,6 +208,14 @@ const ExamWindowRoute = (prisma: PrismaClient) => {
                 select: { id: true, nombre: true, email: true }
               }
             }
+          },
+          intentos: {
+            where: {
+              finishedAt: { not: null },
+              calificacionManual: null
+            },
+            select: { id: true },
+            orderBy: { finishedAt: 'asc' }
           }
         },
         orderBy: {
@@ -137,12 +223,63 @@ const ExamWindowRoute = (prisma: PrismaClient) => {
         }
       });
 
-      res.json(examWindows);
+      const examWindowsConCorreccionPendiente = examWindows.map(({ intentos, ...window }) => ({
+        ...window,
+        pendientesCorreccionCount: intentos.length,
+        primerIntentoPendienteId: intentos[0]?.id ?? null
+      }));
+
+      res.json(examWindowsConCorreccionPendiente);
     } catch (error: any) {
       console.error('Error obteniendo ventanas de examen:', error);
       res.status(500).json({ error: 'Error interno del servidor' });
     }
   });
+
+// Buscar una ventana por código de acceso (para que el alumno se inscriba sin ver el listado completo)
+router.get('/por-codigo/:codigo', authenticateToken, requireRole(['student']), async (req, res) => {
+  const codigo = req.params.codigo.trim().toUpperCase();
+
+  try {
+    await updateWindowStatuses(prisma, undefined, false, true);
+
+    const examWindow = await prisma.examWindow.findUnique({
+      where: { codigo },
+      omit: { codigoParte: true },
+      include: {
+        exam: {
+          select: {
+            id: true,
+            titulo: true,
+            eliminado: true,
+            profesor: { select: { nombre: true } }
+          }
+        },
+        inscripciones: {
+          where: { cancelledAt: null },
+          select: { id: true, userId: true }
+        }
+      }
+    });
+
+    if (!examWindow || examWindow.exam.eliminado) {
+      return res.status(404).json({ error: 'Código inválido' });
+    }
+
+    const inscripcionesActivas = examWindow.inscripciones.length;
+    const cupoDisponible = examWindow.cupoMaximo - inscripcionesActivas;
+    const yaInscrito = examWindow.inscripciones.some(ins => ins.userId === req.user!.userId);
+
+    res.json({
+      ...examWindow,
+      cupoDisponible,
+      yaInscrito
+    });
+  } catch (error: any) {
+    console.error('Error buscando ventana por código:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
 
 // Obtener ventanas disponibles para estudiantes
 router.get('/disponibles', authenticateToken, requireRole(['student']), async (req, res) => {
@@ -169,7 +306,9 @@ router.get('/disponibles', authenticateToken, requireRole(['student']), async (r
         {
           sinTiempo: true
         }
-      ]
+      ],
+      // Las ventanas de exámenes soft-eliminados no deben ofrecerse para inscripción
+      exam: { eliminado: false }
     };
 
     // Filtro por ID de ventana
@@ -225,6 +364,7 @@ router.get('/disponibles', authenticateToken, requireRole(['student']), async (r
 
     const examWindows = await prisma.examWindow.findMany({
       where: whereClause,
+      omit: { codigoParte: true },
       include: {
         exam: {
           select: {
@@ -270,7 +410,7 @@ router.get('/disponibles', authenticateToken, requireRole(['student']), async (r
   // Actualizar ventana de examen
   router.put('/:id', authenticateToken, requireRole(['professor']), async (req, res) => {
     const windowId = parseInt(req.params.id);
-    const { nombre, fechaInicio, duracion, modalidad, cupoMaximo, notas, activa, estado, usaSEB, sinTiempo } = req.body;
+    const { nombre, fechaInicio, duracion, modalidad, cupoMaximo, notas, activa, estado, usaSEB, sinTiempo, modoAvanceParte, kioskMode } = req.body;
 
     try {
       // Verificar que la ventana existe y pertenece al profesor
@@ -299,6 +439,17 @@ router.get('/disponibles', authenticateToken, requireRole(['student']), async (r
       if (estado) updateData.estado = estado;
       if (usaSEB !== undefined) updateData.usaSEB = Boolean(usaSEB);
       if (sinTiempo !== undefined) updateData.sinTiempo = Boolean(sinTiempo);
+      if (kioskMode !== undefined) updateData.kioskMode = Number(kioskMode);
+      Object.assign(updateData, getSEBSettings(req.body));
+      if (modoAvanceParte !== undefined) {
+        if (!MODOS_AVANCE_PARTE.includes(modoAvanceParte)) {
+          return res.status(400).json({ error: 'Modo de avance entre partes inválido' });
+        }
+        updateData.modoAvanceParte = modoAvanceParte;
+        if (modoAvanceParte === 'codigo' && !existingWindow.codigoParte) {
+          updateData.codigoParte = generateCodigoParte();
+        }
+      }
 
       const updatedWindow = await prisma.examWindow.update({
         where: { id: windowId },
@@ -533,6 +684,238 @@ router.get('/disponibles', authenticateToken, requireRole(['student']), async (r
 
     } catch (error: any) {
       console.error('Error cambiando estado activo de ventana:', error);
+      res.status(500).json({ error: 'Error interno del servidor' });
+    }
+  });
+
+  // POST /exam-windows/:id/cerrar - Cierra el examen para todos: nadie puede seguir
+  // rindiendo y los intentos en curso se finalizan con lo que tengan guardado.
+  router.post('/:id/cerrar', authenticateToken, requireRole(['professor']), async (req, res) => {
+    const windowId = parseInt(req.params.id);
+
+    if (isNaN(windowId)) {
+      return res.status(400).json({ error: "ID de ventana inválido" });
+    }
+
+    try {
+      const existingWindow = await prisma.examWindow.findFirst({
+        where: { id: windowId, exam: { profesorId: req.user!.userId } }
+      });
+
+      if (!existingWindow) {
+        return res.status(404).json({ error: 'Ventana no encontrada o no tienes permisos' });
+      }
+
+      if (existingWindow.estado === 'finalizada') {
+        return res.status(400).json({ error: 'El examen ya está cerrado' });
+      }
+
+      const { finalizados, total } = await closeExamWindow(prisma, windowId);
+
+      res.json({
+        success: true,
+        message: total > 0
+          ? `Examen cerrado. Se finalizaron ${finalizados} de ${total} intentos en curso.`
+          : 'Examen cerrado.',
+        finalizados,
+        total
+      });
+    } catch (error) {
+      console.error('Error cerrando ventana:', error);
+      res.status(500).json({ error: 'Error interno del servidor' });
+    }
+  });
+
+  // POST /exam-windows/:id/habilitar-parte - Habilita la siguiente parte para todos
+  router.post('/:id/habilitar-parte', authenticateToken, requireRole(['professor']), async (req, res) => {
+    const windowId = parseInt(req.params.id);
+
+    if (isNaN(windowId)) {
+      return res.status(400).json({ error: "ID de ventana inválido" });
+    }
+
+    try {
+      const existingWindow = await prisma.examWindow.findFirst({
+        where: { id: windowId, exam: { profesorId: req.user!.userId } },
+        include: { exam: { select: { _count: { select: { partes: true } } } } }
+      });
+
+      if (!existingWindow) {
+        return res.status(404).json({ error: 'Ventana no encontrada o no tienes permisos' });
+      }
+
+      if (existingWindow.modoAvanceParte !== 'manual') {
+        return res.status(400).json({ error: 'La ventana no está en modo de habilitación del profesor' });
+      }
+
+      if (existingWindow.partesHabilitadas >= existingWindow.exam._count.partes) {
+        return res.status(400).json({ error: 'Todas las partes ya están habilitadas' });
+      }
+
+      const updatedWindow = await prisma.examWindow.update({
+        where: { id: windowId },
+        data: { partesHabilitadas: existingWindow.partesHabilitadas + 1 }
+      });
+
+      res.json({
+        success: true,
+        message: `Parte ${updatedWindow.partesHabilitadas} habilitada para todos`,
+        partesHabilitadas: updatedWindow.partesHabilitadas
+      });
+    } catch (error) {
+      console.error('Error habilitando parte:', error);
+      res.status(500).json({ error: 'Error interno del servidor' });
+    }
+  });
+
+  // GET /exam-windows/:id/esperando-parte - Alumnos que terminaron una parte y esperan la siguiente
+  router.get('/:id/esperando-parte', authenticateToken, requireRole(['professor']), async (req, res) => {
+    const windowId = parseInt(req.params.id);
+
+    if (isNaN(windowId)) {
+      return res.status(400).json({ error: "ID de ventana inválido" });
+    }
+
+    try {
+      const existingWindow = await prisma.examWindow.findFirst({
+        where: { id: windowId, exam: { profesorId: req.user!.userId } }
+      });
+
+      if (!existingWindow) {
+        return res.status(404).json({ error: 'Ventana no encontrada o no tienes permisos' });
+      }
+
+      res.json(await getStudentsWaitingNextPart(prisma, windowId));
+    } catch (error) {
+      console.error('Error obteniendo alumnos esperando parte:', error);
+      res.status(500).json({ error: 'Error interno del servidor' });
+    }
+  });
+
+  // POST /exam-windows/:id/habilitar-alumnos - Habilita la siguiente parte a los alumnos elegidos
+  router.post('/:id/habilitar-alumnos', authenticateToken, requireRole(['professor']), async (req, res) => {
+    const windowId = parseInt(req.params.id);
+    const { attemptIds } = req.body;
+
+    if (isNaN(windowId)) {
+      return res.status(400).json({ error: "ID de ventana inválido" });
+    }
+
+    if (!Array.isArray(attemptIds) || attemptIds.length === 0 || !attemptIds.every(id => Number.isInteger(id))) {
+      return res.status(400).json({ error: "Elegí al menos un alumno" });
+    }
+
+    try {
+      const existingWindow = await prisma.examWindow.findFirst({
+        where: { id: windowId, exam: { profesorId: req.user!.userId } }
+      });
+
+      if (!existingWindow) {
+        return res.status(404).json({ error: 'Ventana no encontrada o no tienes permisos' });
+      }
+
+      if (existingWindow.modoAvanceParte !== 'manual') {
+        return res.status(400).json({ error: 'La ventana no está en modo de habilitación del profesor' });
+      }
+
+      const habilitados = await enableNextPartForStudents(prisma, windowId, attemptIds);
+
+      res.json({ success: true, habilitados });
+    } catch (error) {
+      console.error('Error habilitando alumnos:', error);
+      res.status(500).json({ error: 'Error interno del servidor' });
+    }
+  });
+
+  // GET /exam-windows/:id/tiempo - Fin del examen, alumnos rindiendo con su propio fin
+  // e historial de extensiones de tiempo (solo ventanas con horario)
+  router.get('/:id/tiempo', authenticateToken, requireRole(['professor']), async (req, res) => {
+    const windowId = parseInt(req.params.id);
+
+    if (isNaN(windowId)) {
+      return res.status(400).json({ error: "ID de ventana inválido" });
+    }
+
+    try {
+      const existingWindow = await prisma.examWindow.findFirst({
+        where: { id: windowId, exam: { profesorId: req.user!.userId } }
+      });
+
+      if (!existingWindow) {
+        return res.status(404).json({ error: 'Ventana no encontrada o no tienes permisos' });
+      }
+
+      const tiempo = await getTiempoDeVentana(prisma, windowId);
+      if (!tiempo) {
+        return res.status(400).json({ error: 'La ventana no tiene horario' });
+      }
+
+      res.json(tiempo);
+    } catch (error) {
+      console.error('Error obteniendo tiempo de la ventana:', error);
+      res.status(500).json({ error: 'Error interno del servidor' });
+    }
+  });
+
+  // POST /exam-windows/:id/extender-tiempo - Da minutos extra a todos los alumnos
+  // de la ventana, o a uno solo si se manda attemptId
+  router.post('/:id/extender-tiempo', authenticateToken, requireRole(['professor']), async (req, res) => {
+    const windowId = parseInt(req.params.id);
+    const { minutos, motivo, attemptId } = req.body;
+
+    if (isNaN(windowId)) {
+      return res.status(400).json({ error: "ID de ventana inválido" });
+    }
+
+    try {
+      const result = await otorgarExtension(prisma, {
+        examWindowId: windowId,
+        profesorId: req.user!.userId,
+        minutos: Number(minutos),
+        motivo: typeof motivo === 'string' ? motivo : undefined,
+        attemptId: attemptId != null ? Number(attemptId) : null
+      });
+
+      if (result.error) {
+        return res.status(result.error.status).json({ error: result.error.error });
+      }
+
+      res.status(201).json({ success: true, extension: result.extension });
+    } catch (error) {
+      console.error('Error extendiendo tiempo:', error);
+      res.status(500).json({ error: 'Error interno del servidor' });
+    }
+  });
+
+  // POST /exam-windows/:id/regenerar-codigo-parte - Nuevo código para pasar de parte
+  router.post('/:id/regenerar-codigo-parte', authenticateToken, requireRole(['professor']), async (req, res) => {
+    const windowId = parseInt(req.params.id);
+
+    if (isNaN(windowId)) {
+      return res.status(400).json({ error: "ID de ventana inválido" });
+    }
+
+    try {
+      const existingWindow = await prisma.examWindow.findFirst({
+        where: { id: windowId, exam: { profesorId: req.user!.userId } }
+      });
+
+      if (!existingWindow) {
+        return res.status(404).json({ error: 'Ventana no encontrada o no tienes permisos' });
+      }
+
+      if (existingWindow.modoAvanceParte !== 'codigo') {
+        return res.status(400).json({ error: 'La ventana no está en modo de habilitación por código' });
+      }
+
+      const updatedWindow = await prisma.examWindow.update({
+        where: { id: windowId },
+        data: { codigoParte: generateCodigoParte() }
+      });
+
+      res.json({ success: true, codigoParte: updatedWindow.codigoParte });
+    } catch (error) {
+      console.error('Error regenerando código de parte:', error);
       res.status(500).json({ error: 'Error interno del servidor' });
     }
   });

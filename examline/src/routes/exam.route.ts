@@ -1,19 +1,195 @@
 import { type PrismaClient } from "@prisma/client";
 import { Router } from "express";
+import multer from "multer";
+import { v2 as cloudinary } from "cloudinary";
 import { authenticateToken, requireRole, requireOwnership } from "../middleware/auth.ts";
 import CodeExecutionService from "../services/codeExecution.service.ts";
 import {
   createExam,
   getExamsForUser,
   getExamById,
+  updateExam,
+  deleteExam,
   testSolution,
   testSolutionPreview,
   saveReferenceSolution
 } from "../services/exam.service.ts";
 
+// CLOUDINARY_URL en el .env configura el SDK automáticamente
+const uploadToCloudinary = (buffer: Buffer, folder: string, publicId: string): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(
+      { resource_type: "raw", folder, public_id: publicId },
+      (err, result) => {
+        if (err || !result) return reject(err);
+        resolve(result.secure_url);
+      }
+    );
+    stream.end(buffer);
+  });
+};
+
+const ALLOWED_MIME_TYPES: Record<string, string> = {
+  "application/pdf": ".pdf",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx"
+};
+
+const enunciadoUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+  fileFilter: (_req, file, cb) => {
+    if (ALLOWED_MIME_TYPES[file.mimetype]) {
+      cb(null, true);
+    } else {
+      cb(new Error("Solo se permiten archivos PDF o DOCX"));
+    }
+  }
+});
+
+// El navegador puede reportar distintos mimetypes para .csv/.txt según el SO/Excel,
+// por eso se valida por extensión del nombre original en vez de por mimetype.
+const ALLOWED_DATASET_EXTENSION = /\.(csv|txt)$/i;
+
+const datasetUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+  fileFilter: (_req, file, cb) => {
+    if (ALLOWED_DATASET_EXTENSION.test(file.originalname)) {
+      cb(null, true);
+    } else {
+      cb(new Error("Solo se permiten archivos CSV o TXT"));
+    }
+  }
+});
+
+const ALLOWED_IMAGE_MIME_TYPES: Record<string, string> = {
+  "image/jpeg": ".jpg",
+  "image/png": ".png",
+  "image/webp": ".webp",
+  "image/gif": ".gif"
+};
+
+const imageUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+  fileFilter: (_req, file, cb) => {
+    if (ALLOWED_IMAGE_MIME_TYPES[file.mimetype]) {
+      cb(null, true);
+    } else {
+      cb(new Error("Solo se permiten imágenes JPEG, PNG, WEBP o GIF"));
+    }
+  }
+});
+
 const ExamRoute = (prisma: PrismaClient) => {
   const router = Router();
   const codeExecutionService = new CodeExecutionService();
+
+  // POST /exams/upload-enunciado (protected - professors only)
+  // Sube un archivo PDF/DOCX con la consigna de un examen de programación
+  router.post(
+    "/upload-enunciado",
+    authenticateToken,
+    requireRole(['professor']),
+    (req, res) => {
+      enunciadoUpload.single("archivo")(req, res, async (err: any) => {
+        if (err) {
+          const message = err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE'
+            ? "El archivo supera el tamaño máximo permitido (10MB)"
+            : err.message || "Error al subir el archivo";
+          return res.status(400).json({ error: message });
+        }
+
+        if (!req.file) {
+          return res.status(400).json({ error: "Debe adjuntar un archivo" });
+        }
+
+        try {
+          const ext = ALLOWED_MIME_TYPES[req.file.mimetype];
+          const publicId = `${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`;
+          const url = await uploadToCloudinary(req.file.buffer, "enunciados", publicId);
+
+          res.status(201).json({
+            url,
+            nombre: req.file.originalname
+          });
+        } catch (uploadErr) {
+          console.error('Error subiendo a Cloudinary:', uploadErr);
+          res.status(500).json({ error: "Error al subir el archivo al storage" });
+        }
+      });
+    }
+  );
+
+  // POST /exams/upload-dataset (protected - professors only)
+  // Sube un archivo CSV con datos que el código del alumno podrá abrir/leer
+  // durante la ejecución (ej. open("archivo.csv")).
+  router.post(
+    "/upload-dataset",
+    authenticateToken,
+    requireRole(['professor']),
+    (req, res) => {
+      datasetUpload.single("archivo")(req, res, async (err: any) => {
+        if (err) {
+          const message = err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE'
+            ? "El archivo supera el tamaño máximo permitido (5MB)"
+            : err.message || "Error al subir el archivo";
+          return res.status(400).json({ error: message });
+        }
+
+        if (!req.file) {
+          return res.status(400).json({ error: "Debe adjuntar un archivo" });
+        }
+
+        try {
+          const ext = req.file.originalname.toLowerCase().endsWith('.txt') ? '.txt' : '.csv';
+          const publicId = `${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`;
+          const url = await uploadToCloudinary(req.file.buffer, "datasets", publicId);
+
+          res.status(201).json({
+            url,
+            nombre: req.file.originalname
+          });
+        } catch (uploadErr) {
+          console.error('Error subiendo a Cloudinary:', uploadErr);
+          res.status(500).json({ error: "Error al subir el archivo al storage" });
+        }
+      });
+    }
+  );
+
+  // POST /exams/upload-question-image (protected - professors only)
+  // Sube una imagen para acompañar el enunciado de una pregunta multiple choice
+  router.post(
+    "/upload-question-image",
+    authenticateToken,
+    requireRole(['professor']),
+    (req, res) => {
+      imageUpload.single("archivo")(req, res, async (err: any) => {
+        if (err) {
+          const message = err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE'
+            ? "El archivo supera el tamaño máximo permitido (5MB)"
+            : err.message || "Error al subir la imagen";
+          return res.status(400).json({ error: message });
+        }
+
+        if (!req.file) {
+          return res.status(400).json({ error: "Debe adjuntar una imagen" });
+        }
+
+        try {
+          const ext = ALLOWED_IMAGE_MIME_TYPES[req.file.mimetype];
+          const publicId = `${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`;
+          const url = await uploadToCloudinary(req.file.buffer, "question-images", publicId);
+
+          res.status(201).json({ url });
+        } catch (uploadErr) {
+          console.error('Error subiendo imagen a Cloudinary:', uploadErr);
+          res.status(500).json({ error: "Error al subir la imagen al storage" });
+        }
+      });
+    }
+  );
 
   // POST /exams/create (protected - professors only)
   router.post("/create", authenticateToken, requireRole(['professor']), async (req, res) => {
@@ -69,18 +245,67 @@ const ExamRoute = (prisma: PrismaClient) => {
     }
   });
 
-  // POST /exams/:id/test-solution (protected - professors only)
-  // Ejecuta tests contra código temporal o solución de referencia
-  router.post("/:id/test-solution", authenticateToken, requireRole(['professor']), async (req, res) => {
-    try {
-      const examId = parseInt(req.params.id);
-      const { code, useReferenceSolution } = req.body;
+  // PUT /exams/:examId (protected - professors only, must own the exam)
+  // Siempre permite actualizar titulo/ordenAleatorio. El reemplazo de `partes`
+  // (contenido completo) solo se aplica si el examen no tiene intentos.
+  router.put("/:examId", authenticateToken, requireRole(['professor']), async (req, res) => {
+    const examId = parseInt(req.params.examId);
+    if (isNaN(examId)) return res.status(400).json({ error: "examId inválido" });
 
-      if (isNaN(examId)) {
-        return res.status(400).json({ error: "ID de examen inválido" });
+    try {
+      const result = await updateExam(prisma, examId, req.body, req.user!.userId);
+
+      if (result.error) {
+        return res.status(result.error.status).json({ error: result.error.error });
       }
 
-      const result = await testSolution(prisma, codeExecutionService, examId, req.user!.userId, code, useReferenceSolution);
+      if (result.contentEditWarning) {
+        return res.status(result.contentEditWarning.status).json({
+          error: result.contentEditWarning.error,
+          exam: result.exam
+        });
+      }
+
+      res.json(result.exam);
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: "No se pudo actualizar el examen" });
+    }
+  });
+
+  // DELETE /exams/:examId (protected - professors only, must own the exam)
+  // Soft-delete: marca el examen como eliminado sin borrar la fila (preserva
+  // intentos/ventanas históricos).
+  router.delete("/:examId", authenticateToken, requireRole(['professor']), async (req, res) => {
+    const examId = parseInt(req.params.examId);
+    if (isNaN(examId)) return res.status(400).json({ error: "examId inválido" });
+
+    try {
+      const result = await deleteExam(prisma, examId, req.user!.userId);
+
+      if (result.error) {
+        return res.status(result.error.status).json({ error: result.error.error });
+      }
+
+      res.json({ success: true, message: "Examen eliminado correctamente" });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: "No se pudo eliminar el examen" });
+    }
+  });
+
+  // POST /exams/parts/:partId/test-solution (protected - professors only)
+  // Ejecuta tests contra código temporal o solución de referencia
+  router.post("/parts/:partId/test-solution", authenticateToken, requireRole(['professor']), async (req, res) => {
+    try {
+      const partId = parseInt(req.params.partId);
+      const { code, useReferenceSolution } = req.body;
+
+      if (isNaN(partId)) {
+        return res.status(400).json({ error: "ID de parte inválido" });
+      }
+
+      const result = await testSolution(prisma, codeExecutionService, partId, req.user!.userId, code, useReferenceSolution);
 
       if (result.error) {
         return res.status(result.error.status).json({ error: result.error.error });
@@ -104,21 +329,21 @@ const ExamRoute = (prisma: PrismaClient) => {
   // Ejecuta tests contra código durante la creación del examen (sin examen guardado)
   router.post("/test-solution-preview", authenticateToken, requireRole(['professor']), async (req, res) => {
     try {
-      const { code, language, testCases } = req.body;
+      const { code, language, testCases, datasetFiles } = req.body;
 
       if (!code) {
         return res.status(400).json({ error: "Debe proporcionar código para ejecutar" });
       }
 
-      if (!language || !['python', 'javascript'].includes(language)) {
-        return res.status(400).json({ error: "Lenguaje no válido. Use 'python' o 'javascript'" });
+      if (!language || !['python', 'javascript', 'c'].includes(language)) {
+        return res.status(400).json({ error: "Lenguaje no válido. Use 'python', 'javascript' o 'c'" });
       }
 
       if (!testCases || !Array.isArray(testCases) || testCases.length === 0) {
         return res.status(400).json({ error: "Debe proporcionar test cases" });
       }
 
-      const testResults = await testSolutionPreview(codeExecutionService, code, language, testCases);
+      const testResults = await testSolutionPreview(codeExecutionService, code, language, testCases, datasetFiles);
 
       return res.json({
         success: true,
@@ -134,18 +359,18 @@ const ExamRoute = (prisma: PrismaClient) => {
     }
   });
 
-  // PUT /exams/:id/reference-solution (protected - professors only)
+  // PUT /exams/parts/:partId/reference-solution (protected - professors only)
   // Guarda o actualiza la solución de referencia
-  router.put("/:id/reference-solution", authenticateToken, requireRole(['professor']), async (req, res) => {
+  router.put("/parts/:partId/reference-solution", authenticateToken, requireRole(['professor']), async (req, res) => {
     try {
-      const examId = parseInt(req.params.id);
+      const partId = parseInt(req.params.partId);
       const { solucionReferencia } = req.body;
 
-      if (isNaN(examId)) {
-        return res.status(400).json({ error: "ID de examen inválido" });
+      if (isNaN(partId)) {
+        return res.status(400).json({ error: "ID de parte inválido" });
       }
 
-      const result = await saveReferenceSolution(prisma, examId, req.user!.userId, solucionReferencia);
+      const result = await saveReferenceSolution(prisma, partId, req.user!.userId, solucionReferencia);
 
       if (result.error) {
         return res.status(result.error.status).json({ error: result.error.error });

@@ -1,3 +1,7 @@
 node_modules
 # Keep environment variables out of version control
 .env
+# Archivos subidos por usuarios (consignas PDF/DOCX)
+uploads
+# Archivos .seb que genera el backend al descargar o probar la configuración de SEB
+examenes

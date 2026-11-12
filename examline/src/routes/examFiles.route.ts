@@ -218,7 +218,7 @@ router.post('/:examId/reference-solution', authenticateToken, async (req, res) =
 
     const exam = ownership.exam!;
 
-    if (exam.tipo !== 'programming') {
+    if (!exam.partes.some(p => p.tipo === 'programming')) {
       return res.status(400).json({ error: 'Solo los exámenes de programación pueden tener solución de referencia' });
     }
 

@@ -1,6 +1,7 @@
 import express from "express";
-import { PrismaClient } from "@prisma/client";
+import { Prisma, PrismaClient } from "@prisma/client";
 import { authenticateToken } from "../middleware/auth";
+import { normalizarImagenesOpciones } from "../services/exam.service";
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -37,9 +38,11 @@ router.post("/", authenticateToken, async (req, res) => {
       return res.status(403).json({ error: "Solo los profesores pueden crear preguntas en el banco" });
     }
 
-    const { tipo, titulo, texto, opciones, correcta, tags } = req.body;
+    const { tipo, dificultad, titulo, texto, opciones, correcta, correctas, tags, imagenUrl, imagenesOpciones } = req.body;
+    // essay/file_upload no tienen respuesta correcta predefinida (corrección manual)
+    const requiereCorrecta = !["essay", "file_upload", "multiple_response"].includes(tipo || "multiple_choice");
 
-    if (!texto || !opciones || correcta === undefined) {
+    if (!texto || !opciones || (requiereCorrecta && correcta === undefined)) {
       return res.status(400).json({ error: "Faltan campos requeridos" });
     }
 
@@ -47,11 +50,15 @@ router.post("/", authenticateToken, async (req, res) => {
       data: {
         profesorId: userId,
         tipo: tipo || "multiple_choice",
+        dificultad: dificultad || "media",
         titulo: titulo || "Sin título",
         texto,
         opciones,
-        correcta,
-        tags: tags || []
+        correcta: requiereCorrecta ? correcta : null,
+        correctas: tipo === "multiple_response" ? (correctas ?? null) : null,
+        tags: tags || [],
+        imagenUrl: imagenUrl || null,
+        imagenesOpciones: normalizarImagenesOpciones({ tipo, opciones, imagenesOpciones })
       }
     });
 
@@ -67,7 +74,7 @@ router.put("/:id", authenticateToken, async (req, res) => {
   try {
     const userId = (req as any).user.userId;
     const questionId = parseInt(req.params.id);
-    const { tipo, titulo, texto, opciones, correcta, tags } = req.body;
+    const { tipo, dificultad, titulo, texto, opciones, correcta, correctas, tags, imagenUrl, imagenesOpciones } = req.body;
 
     const question = await prisma.questionBank.findUnique({
       where: { id: questionId }
@@ -81,15 +88,24 @@ router.put("/:id", authenticateToken, async (req, res) => {
       return res.status(403).json({ error: "No tienes permiso para editar esta pregunta" });
     }
 
+    const tipoFinal = tipo || question.tipo;
+    const requiereCorrecta = !["essay", "file_upload", "multiple_response"].includes(tipoFinal);
+
     const updatedQuestion = await prisma.questionBank.update({
       where: { id: questionId },
-      data: { 
-        tipo: tipo || question.tipo,
+      data: {
+        tipo: tipoFinal,
+        dificultad: dificultad || question.dificultad,
         titulo: titulo || question.titulo,
-        texto, 
-        opciones, 
-        correcta, 
-        tags: tags !== undefined ? tags : question.tags 
+        texto,
+        opciones,
+        correcta: requiereCorrecta ? correcta : null,
+        correctas: tipoFinal === "multiple_response" ? (correctas ?? question.correctas) : null,
+        tags: tags !== undefined ? tags : question.tags,
+        imagenUrl: imagenUrl !== undefined ? (imagenUrl || null) : question.imagenUrl,
+        ...(imagenesOpciones !== undefined
+          ? { imagenesOpciones: normalizarImagenesOpciones({ tipo: tipoFinal, opciones, imagenesOpciones }) ?? Prisma.DbNull }
+          : {})
       }
     });
 

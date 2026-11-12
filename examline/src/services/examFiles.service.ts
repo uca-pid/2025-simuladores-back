@@ -291,7 +291,8 @@ export async function validateExamOwnerForReferenceSolution(
   action: 'ver' | 'modificar' | 'eliminar'
 ) {
   const exam = await prisma.exam.findUnique({
-    where: { id: examId }
+    where: { id: examId },
+    include: { partes: true }
   });
 
   if (!exam) {

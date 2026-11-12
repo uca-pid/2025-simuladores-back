@@ -1,4 +1,5 @@
 import { type PrismaClient } from "@prisma/client";
+import { finConExtension, minutosExtraDeVentana } from "./examTimeExtension.service.ts";
 
 /**
  * Parsea un string de fecha/hora (con o sin separador 'T') como hora local.
@@ -16,6 +17,62 @@ export function parseLocalDate(dateString: string): Date {
   const [hours, minutes] = hora.split(":").map(Number);
 
   return new Date(year, month - 1, day, hours, minutes);
+}
+
+const CODIGO_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // sin caracteres ambiguos (0/O, 1/I, etc.)
+
+function randomCodigo(length = 6): string {
+  let codigo = "";
+  for (let i = 0; i < length; i++) {
+    codigo += CODIGO_CHARS[Math.floor(Math.random() * CODIGO_CHARS.length)];
+  }
+  return codigo;
+}
+
+/**
+ * Genera un código de acceso único para una ExamWindow, usado por los
+ * estudiantes para auto-inscribirse sin ver el listado de todas las ventanas.
+ */
+export async function generateUniqueExamWindowCode(prisma: PrismaClient): Promise<string> {
+  let codigo = randomCodigo();
+  let existing = await prisma.examWindow.findUnique({ where: { codigo } });
+
+  while (existing) {
+    codigo = randomCodigo();
+    existing = await prisma.examWindow.findUnique({ where: { codigo } });
+  }
+
+  return codigo;
+}
+
+/**
+ * Indica si una ventana permite rendir en este momento. Las ventanas con tiempo
+ * dependen de estado+horario (más los minutos extra que el profesor haya dado a
+ * ese alumno o a todos); las sin tiempo, de estar activas y no cerradas por el
+ * profesor (al cerrarlas pasan a 'finalizada').
+ */
+export function isWindowOpenForAttempts(window: {
+  activa: boolean;
+  sinTiempo: boolean;
+  estado: string;
+  fechaInicio: Date | null;
+  duracion: number | null;
+}, minutosExtra = 0): boolean {
+  if (!window.activa || window.estado === 'finalizada') {
+    return false;
+  }
+  if (window.sinTiempo) {
+    return true;
+  }
+  const now = new Date();
+  const startDate = new Date(window.fechaInicio!);
+  const endDate = finConExtension(window, minutosExtra);
+  return window.estado === 'en_curso' && now >= startDate && now <= endDate;
+}
+
+/** Código corto que el profesor dicta para que los alumnos pasen a la siguiente parte. */
+export function generateCodigoParte(): string {
+  return randomCodigo(5);
 }
 
 // Convierte string de filtro a Date en hora local
@@ -47,7 +104,8 @@ export async function updateWindowStatuses(
   const examWindows = await prisma.examWindow.findMany({
     where: whereClause,
     include: {
-      exam: { select: { id: true, titulo: true, profesorId: true } }
+      exam: { select: { id: true, titulo: true, profesorId: true } },
+      extensionesTiempo: { select: { attemptId: true, minutos: true } }
     }
   });
 
@@ -66,7 +124,8 @@ export async function updateWindowStatuses(
     }
 
     const startDate = new Date(window.fechaInicio!);
-    const endDate = new Date(startDate.getTime() + (window.duracion! * 60 * 1000));
+    // La ventana sigue en curso hasta que termina el último alumno con tiempo extra
+    const endDate = finConExtension(window, minutosExtraDeVentana(window.extensionesTiempo));
     let newStatus = window.estado;
     let shouldUpdate = false;
 
@@ -178,6 +237,18 @@ const scheduleExactStateChange = async (windowId: number, changeTime: Date, newS
         if (prismaInstance) {
           setImmediate(async () => {
             try {
+              // Si mientras tanto el profesor dio más tiempo, no finalizar
+              // todavía: la próxima programación usa el fin actualizado.
+              if (newState === 'finalizada') {
+                const actual = await prismaInstance!.examWindow.findUnique({
+                  where: { id: windowId },
+                  include: { extensionesTiempo: { select: { attemptId: true, minutos: true } } }
+                });
+                if (!actual || actual.estado === 'finalizada') return;
+                const fin = finConExtension(actual, minutosExtraDeVentana(actual.extensionesTiempo));
+                if (Date.now() < fin.getTime()) return;
+              }
+
               await prismaInstance!.examWindow.update({
                 where: { id: windowId },
                 data: { estado: newState }
@@ -227,13 +298,15 @@ export const startMillisecondSystem = (prisma: PrismaClient) => {
           ]
         },
         include: {
-          exam: { select: { profesorId: true } }
+          exam: { select: { profesorId: true } },
+          extensionesTiempo: { select: { attemptId: true, minutos: true } }
         }
       });
 
       for (const window of upcomingWindows) {
+        if (window.sinTiempo || !window.fechaInicio || !window.duracion) continue;
         const startDate = new Date(window.fechaInicio);
-        const endDate = new Date(startDate.getTime() + window.duracion * 60 * 1000);
+        const endDate = finConExtension(window, minutosExtraDeVentana(window.extensionesTiempo));
 
         // Programar inicio si está programada
         if (window.estado === 'programada' && startDate > now) {
