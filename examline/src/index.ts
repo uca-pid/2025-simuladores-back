@@ -1,14 +1,20 @@
 import 'dotenv/config'; // Load environment variables first
 
+import dns from 'node:dns';
+
 // Configurar zona horaria del servidor para Argentina
 process.env.TZ = 'America/Argentina/Buenos_Aires';
 
 import { PrismaClient } from '@prisma/client';
+import { PrismaPg } from '@prisma/adapter-pg';
+import pg from 'pg';
 import express, { NextFunction, Request, Response } from 'express';
 import cors from 'cors'; // Importar CORS
 import { createServer } from 'http';
 import addRoutes from './routes'; // Asegúrate de que esta ruta sea correcta
 import { verificarEjecucionCodigo } from './services/codeExecution.service.ts';
+
+dns.setDefaultResultOrder('ipv4first');
 
 // Reintenta automáticamente cualquier query que falle por P1001 ("Can't reach
 // database server"): pasa cuando Neon (plan free) suspendió el compute por
@@ -17,7 +23,12 @@ import { verificarEjecucionCodigo } from './services/codeExecution.service.ts';
 // (no solo al arrancar).
 const MAX_QUERY_RETRIES = 3;
 const RETRY_DELAY_MS = 1500;
-const prisma = new PrismaClient().$extends({
+const pool = new pg.Pool({
+  connectionString: process.env.DATABASE_URL,
+  family: 4,
+});
+const adapter = new PrismaPg(pool);
+const prisma = new PrismaClient({ adapter }).$extends({
   query: {
     async $allOperations({ model, operation, args, query }) {
       for (let intento = 1; intento <= MAX_QUERY_RETRIES; intento++) {
