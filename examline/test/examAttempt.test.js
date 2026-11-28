@@ -13,6 +13,7 @@ const prismaMock = {
     findFirst: jest.fn(),
     create: jest.fn(),
     update: jest.fn(),
+    updateMany: jest.fn(),
     findMany: jest.fn(),
   },
   exam: {
@@ -161,5 +162,78 @@ describe("ExamAttemptRoute", () => {
       expect(res.statusCode).toBe(200);
       expect(res.body).toHaveProperty("hasAttempt", false);
     });
+  });
+
+  describe("GET /exam-attempts/:attemptId/status (ventana vencida)", () => {
+    const intentoEnCurso = (examWindow) => ({
+      id: 5, userId: 1, examId: 1, estado: "en_progreso", partStatus: "en_curso",
+      currentPartIndex: 0, puntaje: null, examWindow,
+      exam: { partes: [], _count: { partes: 1 } },
+    });
+
+    it("finaliza el intento si la ventana ya fue finalizada", async () => {
+      const ventana = { id: 7, estado: "finalizada", activa: true, sinTiempo: true };
+      prismaMock.examAttempt.findUnique
+        .mockResolvedValueOnce(intentoEnCurso(ventana)) // getAttemptStatus
+        .mockResolvedValueOnce(intentoEnCurso(ventana)) // finalizarSiVencido
+        .mockResolvedValueOnce(intentoEnCurso(ventana)) // forceFinishAttempt
+        .mockResolvedValueOnce({ ...intentoEnCurso(ventana), estado: "finalizado" }); // relectura
+      prismaMock.examAttempt.updateMany.mockResolvedValue({ count: 1 });
+
+      const res = await request(app).get("/exam-attempts/5/status");
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body.estado).toBe("finalizado");
+      expect(prismaMock.examAttempt.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 5, estado: "en_progreso" } })
+      );
+    });
+
+    it("no toca el intento si la ventana sigue abierta", async () => {
+      const ventana = { id: 7, estado: "en_curso", activa: true, sinTiempo: true };
+      prismaMock.examAttempt.findUnique.mockResolvedValue(intentoEnCurso(ventana));
+
+      const res = await request(app).get("/exam-attempts/5/status");
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body.estado).toBe("en_progreso");
+      expect(prismaMock.examAttempt.updateMany).not.toHaveBeenCalled();
+    });
+  });
+});
+
+describe("updateWindowStatuses", () => {
+  it("al vencer la ventana finaliza los intentos que quedaron en curso", async () => {
+    const { updateWindowStatuses } = await import("../src/services/examWindow.service.ts");
+    const haceUnaHora = new Date(Date.now() - 60 * 60 * 1000);
+    const prisma = {
+      examWindow: {
+        findMany: jest.fn().mockResolvedValue([{
+          id: 7, estado: "en_curso", sinTiempo: false, fechaInicio: haceUnaHora, duracion: 30,
+          exam: { id: 1, titulo: "Parcial", profesorId: 2 }, extensionesTiempo: [],
+        }]),
+        update: jest.fn().mockResolvedValue({}),
+      },
+      examAttempt: {
+        findMany: jest.fn().mockResolvedValue([{ id: 5 }]),
+        findUnique: jest.fn().mockResolvedValue({
+          id: 5, userId: 1, examId: 1, estado: "en_progreso", partStatus: "en_curso",
+          currentPartIndex: 0, puntaje: null, exam: { partes: [] },
+        }),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+    };
+
+    await updateWindowStatuses(prisma);
+    // La finalización corre en segundo plano: esperar a que termine
+    for (let i = 0; i < 10; i++) await new Promise(resolve => setImmediate(resolve));
+
+    expect(prisma.examWindow.update).toHaveBeenCalledWith({ where: { id: 7 }, data: { estado: "finalizada" } });
+    expect(prisma.examAttempt.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { examWindowId: 7, estado: "en_progreso" } })
+    );
+    expect(prisma.examAttempt.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 5, estado: "en_progreso" }, data: expect.objectContaining({ estado: "finalizado" }) })
+    );
   });
 });

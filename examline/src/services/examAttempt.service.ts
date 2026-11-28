@@ -1,7 +1,7 @@
 import { Prisma, type PrismaClient } from "@prisma/client";
 import { loadExamDatasets } from "./exam.service.ts";
 import { isWindowOpenForAttempts } from "./examWindow.service.ts";
-import { getMinutosExtra } from "./examTimeExtension.service.ts";
+import { getMinutosExtra, finConExtension } from "./examTimeExtension.service.ts";
 import { traducirRespuestaAlumno } from "../utils/ofuscacionOpciones.ts";
 
 /**
@@ -837,19 +837,26 @@ export async function getAttemptStatus(
   attemptId: number,
   userId: number
 ) {
-  const attempt = await prisma.examAttempt.findUnique({
+  const buscarIntento = () => prisma.examAttempt.findUnique({
     where: { id: attemptId },
     include: {
       examWindow: true,
       exam: { select: { _count: { select: { partes: true } } } }
     }
   });
+  let attempt = await buscarIntento();
 
   if (!attempt) {
     return { error: { status: 404, error: "Intento no encontrado" } as PartAdvanceError };
   }
   if (attempt.userId !== userId) {
     return { error: { status: 403, error: "No autorizado" } as PartAdvanceError };
+  }
+
+  // Si la ventana venció y el intento quedó en curso, se entrega ahora: así el
+  // alumno ve "finalizado" y no un examen cerrado sin entregar.
+  if (attempt.estado === 'en_progreso' && await finalizarSiVencido(prisma, attemptId)) {
+    attempt = (await buscarIntento())!;
   }
 
   const nextIndex = attempt.currentPartIndex + 1;
@@ -931,8 +938,10 @@ async function forceFinishAttempt(prisma: PrismaClient, attemptId: number) {
 
   const finalScore = scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : undefined;
 
-  await prisma.examAttempt.update({
-    where: { id: attemptId },
+  // Condicionado a 'en_progreso': si otro proceso (otra instancia, el barrido
+  // automático o el cierre manual) ya lo finalizó, esta escritura no hace nada.
+  await prisma.examAttempt.updateMany({
+    where: { id: attemptId, estado: 'en_progreso' },
     data: {
       ...updateData,
       estado: 'finalizado',
@@ -954,6 +963,15 @@ export async function closeExamWindow(prisma: PrismaClient, windowId: number) {
     data: { estado: 'finalizada' }
   });
 
+  return finalizarIntentosEnCurso(prisma, windowId);
+}
+
+/**
+ * Finaliza y corrige los intentos que siguen en curso en una ventana ya
+ * finalizada (cierre manual del profesor o vencimiento del horario). Es
+ * idempotente: un intento ya finalizado no se vuelve a tocar.
+ */
+export async function finalizarIntentosEnCurso(prisma: PrismaClient, windowId: number) {
   const intentosEnCurso = await prisma.examAttempt.findMany({
     where: { examWindowId: windowId, estado: 'en_progreso' },
     select: { id: true }
@@ -970,6 +988,40 @@ export async function closeExamWindow(prisma: PrismaClient, windowId: number) {
   }
 
   return { finalizados, total: intentosEnCurso.length };
+}
+
+/**
+ * Un intento está vencido si su ventana fue finalizada o, en ventanas con
+ * tiempo, si ya pasó el fin del horario más los minutos extra de ese alumno.
+ * Una ventana desactivada o que todavía no empezó no vence el intento.
+ */
+function intentoVencido(
+  window: { estado: string; sinTiempo: boolean; fechaInicio: Date | null; duracion: number | null },
+  minutosExtra: number
+): boolean {
+  if (window.estado === 'finalizada') return true;
+  if (window.sinTiempo || !window.fechaInicio || !window.duracion) return false;
+  return Date.now() > finConExtension(window, minutosExtra).getTime();
+}
+
+/**
+ * Respaldo del cierre automático: si el intento sigue en curso pero su ventana
+ * ya venció, lo finaliza en el momento. Devuelve true si lo finalizó.
+ */
+export async function finalizarSiVencido(prisma: PrismaClient, attemptId: number): Promise<boolean> {
+  const attempt = await prisma.examAttempt.findUnique({
+    where: { id: attemptId },
+    include: { examWindow: true }
+  });
+  if (!attempt || attempt.estado !== 'en_progreso' || !attempt.examWindow) return false;
+
+  const minutosExtra = attempt.examWindow.sinTiempo
+    ? 0
+    : await getMinutosExtra(prisma, attempt.examWindow.id, attempt.id);
+  if (!intentoVencido(attempt.examWindow, minutosExtra)) return false;
+
+  await forceFinishAttempt(prisma, attemptId);
+  return true;
 }
 
 /**

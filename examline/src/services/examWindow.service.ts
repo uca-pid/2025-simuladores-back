@@ -1,5 +1,30 @@
 import { type PrismaClient } from "@prisma/client";
 import { finConExtension, minutosExtraDeVentana } from "./examTimeExtension.service.ts";
+import { finalizarIntentosEnCurso } from "./examAttempt.service.ts";
+
+// Ventanas cuyos intentos se están finalizando en este proceso, para que el
+// barrido cada 5s y el timer programado no corrijan lo mismo dos veces a la vez.
+const finalizandoVentanas = new Set<number>();
+
+/**
+ * Al vencer una ventana, finaliza y corrige los intentos que quedaron en curso
+ * (igual que el cierre manual). Corre en segundo plano para no demorar el
+ * barrido ni el request que lo disparó; la escritura de cada intento es
+ * condicional, así que es seguro aunque otra instancia haga lo mismo.
+ */
+export function finalizarIntentosDeVentanaVencida(prisma: PrismaClient, windowId: number): Promise<void> {
+  if (finalizandoVentanas.has(windowId)) return Promise.resolve();
+  finalizandoVentanas.add(windowId);
+
+  return finalizarIntentosEnCurso(prisma, windowId)
+    .then(({ finalizados, total }) => {
+      if (total > 0) {
+        console.log(`Ventana ${windowId} vencida: ${finalizados}/${total} intentos finalizados`);
+      }
+    })
+    .catch(error => console.error(`Error finalizando intentos de la ventana ${windowId}:`, error))
+    .finally(() => finalizandoVentanas.delete(windowId));
+}
 
 /**
  * Parsea un string de fecha/hora (con o sin separador 'T') como hora local.
@@ -145,6 +170,10 @@ export async function updateWindowStatuses(
         data: { estado: newStatus }
       });
 
+      if (newStatus === 'finalizada') {
+        void finalizarIntentosDeVentanaVencida(prisma, window.id);
+      }
+
       const change = {
         id: window.id,
         titulo: (window as any).exam.titulo,
@@ -254,6 +283,10 @@ const scheduleExactStateChange = async (windowId: number, changeTime: Date, newS
                 data: { estado: newState }
               });
               console.log(`💾 BD actualizada para ventana ${windowId}`);
+
+              if (newState === 'finalizada') {
+                await finalizarIntentosDeVentanaVencida(prismaInstance!, windowId);
+              }
             } catch (error) {
               console.error(`❌ Error BD:`, error);
             }

@@ -14,6 +14,7 @@ import {
   continueToNextPart,
   saveDraftAnswers,
   getAttemptStatus,
+  finalizarSiVencido,
 } from "../services/examAttempt.service.ts";
 
 const ALLOWED_ANSWER_FILE_TYPES: Record<string, string> = {
@@ -423,7 +424,7 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
     }
 
     try {
-      const attempt = await prisma.examAttempt.findUnique({
+      const buscarIntento = () => prisma.examAttempt.findUnique({
         where: { id: attemptId },
         include: {
           exam: {
@@ -433,6 +434,7 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
           respuestas: true // Incluir respuestas del nuevo modelo
         }
       });
+      let attempt = await buscarIntento();
 
       if (!attempt) {
         return res.status(404).json({ error: "Intento no encontrado" });
@@ -441,6 +443,12 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
       // Solo el propietario del intento puede verlo
       if (attempt.userId !== userId) {
         return res.status(403).json({ error: "No autorizado para ver este intento" });
+      }
+
+      // Respaldo del cierre automático: si la ventana venció con el intento en
+      // curso, se entrega ahora en vez de dejarlo sin corregir.
+      if (attempt.estado === "en_progreso" && await finalizarSiVencido(prisma, attemptId)) {
+        attempt = (await buscarIntento())!;
       }
 
       // Solo intentos finalizados pueden mostrar resultados
