@@ -19,7 +19,8 @@ export interface StartAttemptValidationError {
 export async function validateAttemptStart(
   prisma: PrismaClient,
   userId: number,
-  examWindowId: number
+  examWindowId: number,
+  examId: number
 ): Promise<StartAttemptValidationError | null> {
   const inscription = await prisma.inscription.findUnique({
     where: {
@@ -32,6 +33,12 @@ export async function validateAttemptStart(
 
   if (!inscription) {
     return { status: 403, error: "No estás inscrito en esta ventana" };
+  }
+
+  // La ventana tiene que ser del examen pedido: si no, un alumno inscripto en la
+  // ventana de un examen podría iniciar un intento de cualquier otro.
+  if (inscription.examWindow.examId !== examId) {
+    return { status: 403, error: "Esta ventana no corresponde a este examen" };
   }
 
   // Verificar que la ventana esté activa

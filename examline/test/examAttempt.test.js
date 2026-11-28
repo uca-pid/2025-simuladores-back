@@ -52,7 +52,7 @@ describe("ExamAttemptRoute", () => {
   describe("POST /exam-attempts/start", () => {
     it("should create a new attempt if none exists", async () => {
       prismaMock.inscription.findUnique.mockResolvedValue({
-        examWindow: { activa: true, estado: "programada", sinTiempo: true },
+        examWindow: { examId: 1, activa: true, estado: "programada", sinTiempo: true },
       });
       prismaMock.examAttempt.findFirst.mockResolvedValue(null);
       prismaMock.exam.findUnique.mockResolvedValue({ id: 1, ordenAleatorio: false, partes: [] });
@@ -68,7 +68,7 @@ describe("ExamAttemptRoute", () => {
 
     it("should return existing attempt if already exists", async () => {
       prismaMock.inscription.findUnique.mockResolvedValue({
-        examWindow: { activa: true, estado: "programada", sinTiempo: true },
+        examWindow: { examId: 1, activa: true, estado: "programada", sinTiempo: true },
       });
       prismaMock.examAttempt.findFirst.mockResolvedValue({ id: 42 });
 
@@ -89,6 +89,28 @@ describe("ExamAttemptRoute", () => {
 
       expect(res.statusCode).toBe(403);
       expect(res.body).toHaveProperty("error");
+    });
+
+    it("should return 400 and not create an attempt without examWindowId", async () => {
+      const res = await request(app)
+        .post("/exam-attempts/start")
+        .send({ examId: 1 });
+
+      expect(res.statusCode).toBe(400);
+      expect(prismaMock.examAttempt.create).not.toHaveBeenCalled();
+    });
+
+    it("should return 403 if the window belongs to another exam", async () => {
+      prismaMock.inscription.findUnique.mockResolvedValue({
+        examWindow: { examId: 2, activa: true, estado: "programada", sinTiempo: true },
+      });
+
+      const res = await request(app)
+        .post("/exam-attempts/start")
+        .send({ examId: 1, examWindowId: 1 });
+
+      expect(res.statusCode).toBe(403);
+      expect(prismaMock.examAttempt.create).not.toHaveBeenCalled();
     });
   });
 

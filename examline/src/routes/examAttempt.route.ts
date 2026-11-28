@@ -86,16 +86,24 @@ const ExamAttemptRoute = (prisma: PrismaClient) => {
 
   // POST /exam-attempts/start - Iniciar un intento de examen (students only)
   router.post("/start", authenticateToken, requireRole(['student']), async (req, res) => {
-    const { examId, examWindowId } = req.body;
+    const examId = Number(req.body.examId);
+    const examWindowId = Number(req.body.examWindowId);
     const userId = req.user!.userId;
 
+    // Un intento siempre se rinde dentro de una ventana: sin ella no hay forma de
+    // validar inscripción, horario ni estado, y el alumno podría abrir cualquier examen.
+    if (!Number.isInteger(examId) || examId <= 0) {
+      return res.status(400).json({ error: "ID de examen inválido" });
+    }
+    if (!Number.isInteger(examWindowId) || examWindowId <= 0) {
+      return res.status(400).json({ error: "Se requiere la ventana de examen para iniciar el intento" });
+    }
+
     try {
-      // Verificar que el estudiante esté inscrito y habilitado
-      if (examWindowId) {
-        const validationError = await validateAttemptStart(prisma, userId, examWindowId);
-        if (validationError) {
-          return res.status(validationError.status).json({ error: validationError.error });
-        }
+      // Verificar que el estudiante esté inscrito y habilitado en una ventana de ese examen
+      const validationError = await validateAttemptStart(prisma, userId, examWindowId, examId);
+      if (validationError) {
+        return res.status(validationError.status).json({ error: validationError.error });
       }
 
       const attempt = await findOrCreateAttempt(prisma, userId, examId, examWindowId);
