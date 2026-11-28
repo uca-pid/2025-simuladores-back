@@ -222,3 +222,44 @@ describe('ExamRoute tests', () => {
     expect(prismaMock.examPart.update).toHaveBeenCalled();
   });
 });
+
+// ================= getExamById (alumno) =================
+describe('getExamById para alumnos', () => {
+  it('no manda la respuesta de short_answer ni numeric en opciones', async () => {
+    const { getExamById } = await import('../src/services/exam.service.ts');
+    const prisma = {
+      inscription: {
+        findFirst: jest.fn().mockResolvedValue({
+          examWindow: { id: 7, examId: 1, activa: true, sinTiempo: true, estado: 'en_curso' },
+        }),
+      },
+      exam: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 1,
+          profesorId: 99,
+          partes: [{
+            id: 10,
+            tipo: 'multiple_choice',
+            orden: 1,
+            preguntas: [
+              { id: 1, tipo: 'short_answer', texto: 'Capital de Francia', opciones: ['Paris'], correcta: null },
+              { id: 2, tipo: 'numeric', texto: '2 + 2', opciones: ['4', '0'], correcta: null },
+              { id: 3, tipo: 'multiple_choice', texto: 'Elegí', opciones: ['a', 'b'], correcta: 0 },
+            ],
+          }],
+        }),
+      },
+      examHistory: { upsert: jest.fn() },
+      examAttempt: { findFirst: jest.fn().mockResolvedValue(null) },
+    };
+
+    const { exam, error } = await getExamById(prisma, 1, 7, 'student', 5);
+
+    expect(error).toBeUndefined();
+    const [shortAnswer, numeric, multipleChoice] = exam.partes[0].preguntas;
+    expect(shortAnswer.opciones).toEqual([]);
+    expect(numeric.opciones).toEqual([]);
+    expect(multipleChoice.opciones).toHaveLength(2);
+    expect(multipleChoice).not.toHaveProperty('correcta');
+  });
+});

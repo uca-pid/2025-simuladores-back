@@ -402,6 +402,20 @@ export async function getExamsForUser(
   return { exams };
 }
 
+/** Tipos de pregunta cuya respuesta correcta se guarda en `opciones`, no en `correcta`. */
+const TIPOS_RESPUESTA_EN_OPCIONES = ['short_answer', 'numeric'];
+
+/**
+ * En short_answer `opciones` son las respuestas aceptadas y en numeric es
+ * [valorCorrecto, tolerancia]: el alumno no puede recibirlas. El front no usa
+ * `opciones` para dibujar estos tipos, así que se mandan vacías.
+ */
+function ocultarRespuestaEnOpciones<T extends { tipo?: string | null; opciones?: any }>(pregunta: T): T {
+  return pregunta.tipo && TIPOS_RESPUESTA_EN_OPCIONES.includes(pregunta.tipo)
+    ? { ...pregunta, opciones: [] }
+    : pregunta;
+}
+
 /**
  * Obtiene un examen por id, validando propiedad para profesores e inscripción
  * en ventana activa para estudiantes. Sanitiza la respuesta según el rol.
@@ -581,7 +595,7 @@ export async function getExamById(
               return mezclarOpcionesParaAlumno(sinCorrectas, userId, examId);
             }
             const { correcta, ...preguntaSinRespuesta } = sinCorrectas;
-            return mezclarOpcionesParaAlumno(preguntaSinRespuesta, userId, examId);
+            return mezclarOpcionesParaAlumno(ocultarRespuestaEnOpciones(preguntaSinRespuesta), userId, examId);
           })
         : [];
 
@@ -639,7 +653,7 @@ export async function getExamForSEBPreview(prisma: PrismaClient, examId: number,
     testCases: Array.isArray(testCases) ? testCases.map((tc: any) => ({ description: tc.description || 'Test case' })) : [],
     preguntas: preguntas.map(({ correcta, correctas, ...pregunta }) =>
       // En matching y fill_in_blank 'correcta' es una cantidad que el alumno necesita
-      (pregunta.tipo === 'matching' || pregunta.tipo === 'fill_in_blank') ? { ...pregunta, correcta } : pregunta
+      (pregunta.tipo === 'matching' || pregunta.tipo === 'fill_in_blank') ? { ...pregunta, correcta } : ocultarRespuestaEnOpciones(pregunta)
     ),
   }));
 
